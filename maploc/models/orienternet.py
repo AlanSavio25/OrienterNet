@@ -4,6 +4,12 @@ import numpy as np
 import torch
 from torch.nn.functional import normalize
 
+from maploc.models.ransac_matcher import (
+    grid_refinement_batched,
+    pose_scoring_many_batched,
+    sample_transforms_ransac_batched,
+)
+from maploc.utils.neural_cutout import neural_cutout
 from maploc.utils.wrappers import Transform2D
 
 from . import get_model
@@ -41,11 +47,17 @@ class OrienterNet(BaseModel):
         "add_temperature": False,
         "normalize_features": False,
         "padding_matching": "replicate",
-        "apply_map_prior": True,
+        "apply_map_prior": False,
         "do_label_smoothing": False,
         "sigma_xy": 1,
         "sigma_r": 2,
-        # depcreated
+        "use_map_cutout": True,
+        "ransac_matcher": True,
+        "clip_negative_scores": True,
+        "num_pose_samples": 20_000,
+        "num_pose_sampling_retries": 8,
+        "ransac_grid_refinement": True,
+        # deprecated
         "depth_parameterization": "scale",
         "norm_depth_scores": False,
         "normalize_scores_by_dim": False,
@@ -89,8 +101,28 @@ class OrienterNet(BaseModel):
             temperature = torch.nn.Parameter(torch.tensor(0.0))
             self.register_parameter("temperature", temperature)
 
+        self.bev_ij_pts = None
+
+    def build_query_grid(self, f_bev):
+        """Computes coordinates for each pixel in f_bev"""
+
+        h, w = f_bev.shape[-2:]  # h = 129, w = 64
+        bev_t_cam = torch.tensor([(h - 1) / 2, 0.0])
+
+        bev_ij_pts = (
+            torch.stack(torch.unravel_index(torch.arange(h * w), (h, w)), -1)
+            - bev_t_cam
+        )
+
+        # BEV faces east in the map frame by default, so we rotate the coords by 90deg
+        bev_ij_pts = (
+            Transform2D.from_degrees(torch.tensor([-90]), torch.zeros(2)) @ bev_ij_pts
+        )
+
+        return bev_ij_pts.view(h, w, 2)
+
     def exhaustive_voting(self, f_bev, f_map, valid_bev, confidence_bev=None):
-        if self.conf.normalize_features:
+        if self.conf.normalize_features or self.conf.use_map_cutout:
             f_bev = normalize(f_bev, dim=1)
             f_map = normalize(f_map, dim=1)
 
@@ -115,6 +147,94 @@ class OrienterNet(BaseModel):
         scores = scores / num_valid[..., None, None]
         return scores
 
+    def compute_similarity(self, f_bev, f_map, valid_bev, confidence_bev=None):
+
+        batch_size = len(f_bev)
+        if self.conf.normalize_features or self.conf.use_map_cutout:
+            f_bev = normalize(f_bev, dim=1)
+            f_map = normalize(f_map, dim=1)
+        f_bev_points = f_bev.movedim(-3, -1).reshape(batch_size, -1, f_bev.shape[-3])
+        f_map_points = f_map.movedim(-3, -1)  # channel to last dim
+        sim_points = torch.einsum("...nd,...ijd->...nij", f_bev_points, f_map_points)
+
+        if self.conf.clip_negative_scores:
+            sim_points = torch.nn.ReLU()(sim_points)
+
+        if self.conf.add_temperature:
+            sim_points *= torch.exp(self.temperature)
+
+        sim_points = sim_points * valid_bev.reshape(batch_size, -1)[..., None, None]
+        prob_points = torch.nn.Softmax(dim=-1)(
+            sim_points.view(*sim_points.shape[:-2], -1)
+        ).view(*sim_points.shape)
+        prob_points = prob_points * valid_bev.reshape(batch_size, -1)[..., None, None]
+
+        num_valid = (
+            valid_bev.reshape(batch_size, -1).sum(-1).clamp(min=1)[:, None, None, None]
+        )
+        sim_points /= num_valid
+        prob_points /= num_valid
+
+        return sim_points, prob_points
+
+    def ransac_voting(self, sim_points, prob_points, valid_bev, map_mask, map_T_cam_gt):
+        """Sample correspondence pairs, compute poses, and score poses"""
+
+        pose_scores = []
+        map_T_cam_samples = []
+        bev_ij_pool = []
+        map_ij_pool = []
+
+        # Temp. work-around for scoring large num of samples with small GPU
+        num_iter = self.conf.num_pose_samples // 5_000
+
+        for i in range(num_iter):
+            map_T_cam_samples_sub, bev_ij_pool_sub, map_ij_pool_sub = (
+                sample_transforms_ransac_batched(
+                    self.bev_ij_pts,
+                    prob_points.detach(),
+                    5_000,
+                    self.conf.num_pose_sampling_retries,
+                )
+            )
+
+            if i == 0:
+                map_T_cam_samples_sub = torch.vmap(lambda *x: torch.cat(x, 0))(
+                    map_T_cam_gt._data.unsqueeze(1), map_T_cam_samples_sub
+                )
+
+            pose_scores_sub = pose_scoring_many_batched(
+                map_T_cam_samples_sub,  # B,num_poses,3
+                sim_points,
+                self.bev_ij_pts,  # I, J, 2
+                valid_bev,
+                map_mask,
+            )
+            if i == 0:
+                # Extract gt pose score and remove from poses
+                gt_pose_score = pose_scores_sub[..., 0]
+                pose_scores_sub = pose_scores_sub[..., 1:]
+                map_T_cam_samples_sub = map_T_cam_samples_sub[..., 1:, :]
+
+            pose_scores.append(pose_scores_sub)
+            map_T_cam_samples.append(map_T_cam_samples_sub)
+            bev_ij_pool.append(bev_ij_pool_sub)
+            map_ij_pool.append(map_ij_pool_sub)
+
+        batch_size = len(sim_points)
+        pose_scores = torch.stack(pose_scores, -1).view(batch_size, -1)
+        map_T_cam_samples = torch.stack(map_T_cam_samples, -2).view(batch_size, -1, 3)
+        bev_ij_pool = torch.stack(bev_ij_pool, -3).view(batch_size, -1, 2, 2)
+        map_ij_pool = torch.stack(map_ij_pool, -3).view(batch_size, -1, 2, 2)
+
+        # Invalidate poses that fall outside the map bounds
+        map_t_cam_samples = map_T_cam_samples[..., 1:]
+        size = torch.tensor(sim_points.shape[-2:]).to(map_t_cam_samples)  # 256, 256
+        valid = torch.all((map_t_cam_samples >= 0) & (map_t_cam_samples < size), -1)
+        pose_scores = pose_scores * valid
+
+        return map_T_cam_samples, pose_scores, bev_ij_pool, map_ij_pool, gt_pose_score
+
     def _forward(self, data):
 
         # Revert memory layout back to spatial layout
@@ -123,6 +243,7 @@ class OrienterNet(BaseModel):
         pred = {}
         pred_map = pred["map"] = self.map_encoder({**data, "map": spatial_map})
         f_map = pred_map["map_features"][0]
+        batch_size = f_map.shape[0]
 
         # Extract image features.
         level = 0
@@ -139,7 +260,7 @@ class OrienterNet(BaseModel):
             f_bev, valid_bev, _ = self.projection_bev(
                 f_polar.float(), None, camera.float()
             )
-        pred_bev = {}
+
         if self.conf.bev_net is None:
             # channel last -> classifier -> channel first
             f_bev = self.feature_projection(f_bev.moveaxis(1, -1)).moveaxis(-1, 1)
@@ -147,73 +268,135 @@ class OrienterNet(BaseModel):
             pred_bev = pred["bev"] = self.bev_net({"input": f_bev})
             f_bev = pred_bev["output"]
 
-        scores = self.exhaustive_voting(
-            f_bev, f_map, valid_bev, pred_bev.get("confidence")
-        )
-        scores = scores.moveaxis(1, -1)  # B,H,W,N
-        if "log_prior" in pred_map and self.conf.apply_map_prior:
-            scores = scores + pred_map["log_prior"][0].unsqueeze(-1)
-        # pred["scores_unmasked"] = scores.clone()
-        if "map_mask" in data:
-            # Revert memory layout back to spatial
-            map_mask = torch.rot90(data["map_mask"], 1, dims=(-2, -1))
-            scores.masked_fill_(~map_mask[..., None], -np.inf)
-        if "yaw_prior" in data:
-            mask_yaw_prior(scores, data["yaw_prior"], self.conf.num_rotations)
-
-        log_probs = log_softmax_spatial(scores)
-        with torch.no_grad():
-            uvr_max = argmax_xyr(scores).to(scores)
-            uvr_avg, _ = expectation_xyr(log_probs.exp())
-
-        # Refactor model output
-
-        # note: data["map"]'s memory layout is different from its spatial layout.
-        # For direct comparison before and after refactoring, we reverted the map
-        # (and map_mask) format before passing it through the model above.
-
-        h = data["map"].shape[-2]
-        ij_max = uvr_max[..., :2].clone()
-        ij_avg = uvr_avg[..., :2].clone()
-        ij_max[..., 1] = h - 1 - uvr_max[..., 1]
-        ij_avg[..., 1] = h - 1 - uvr_avg[..., 1]
-
-        # yaw to east-counterclockwise
-        yaw_max = 90 - uvr_max[..., 2][..., None]
-        yaw_avg = 90 - uvr_avg[..., 2][..., None]
-
-        map_T_cam_max = Transform2D.from_degrees(yaw_max, ij_max)
-        map_T_cam_avg = Transform2D.from_degrees(yaw_avg, ij_avg)
-
-        resolution = 1 / data["pixels_per_meter"][..., None]
-        tile_T_cam_max = Transform2D.from_pixels(map_T_cam_max, resolution)
-        tile_T_cam_expectation = Transform2D.from_pixels(map_T_cam_avg, resolution)
-
-        # spatial to memory layout
-        pred["bev"]["output"] = torch.rot90(pred["bev"]["output"], -1, dims=(-2, -1))
-        pred["bev"]["confidence"] = torch.rot90(
-            pred["bev"]["confidence"], -1, dims=(-2, -1)
-        )
-        f_bev = torch.rot90(f_bev, -1, dims=(-2, -1))
-        valid_bev = torch.rot90(valid_bev, -1, dims=(-2, -1))
-        pred["map"]["map_features"] = torch.rot90(
-            torch.stack(pred["map"]["map_features"]), -1, dims=(-2, -1)
-        )
-        if "log_prior" in pred["map"]:
-            pred["map"]["log_prior"] = torch.rot90(
-                torch.stack(pred["map"]["log_prior"]), -1, dims=(-2, -1)
+        # Convert bev to memory layout
+        f_bev = pred["bev"]["output"] = torch.rot90(
+            f_bev, -1, dims=(-2, -1)
+        )  # B, C, I, J
+        confidence_bev = pred_bev.get("confidence")  # B, I, J
+        if confidence_bev is not None:
+            confidence_bev = pred["bev"]["confidence"] = torch.rot90(
+                confidence_bev, -1, dims=(-2, -1)
             )
-        scores = torch.rot90(scores, -1, dims=(-3, -2))
-        log_probs = torch.rot90(log_probs, -1, dims=(-3, -2))
+        valid_bev = torch.rot90(valid_bev, -1, dims=(-2, -1))  # B, I, J
+        f_map = pred["map"]["map_features"][0] = torch.rot90(f_map, -1, dims=(-2, -1))
+        map_mask = data.get(
+            "map_mask", torch.ones((batch_size, *f_map.shape[-2:])).to(valid_bev)
+        )
+
+        if self.bev_ij_pts is None:
+            self.bev_ij_pts = self.build_query_grid(f_bev).to(f_map)
+
+        if self.conf.use_map_cutout:  # for evaluating matchers
+            f_bev, valid_cutout = neural_cutout(
+                self.bev_ij_pts, f_map, data["map_T_cam"]
+            )
+            valid_bev = valid_bev & valid_cutout
+            if confidence_bev is not None:
+                confidence_bev = pred_bev["confidence"] = (
+                    torch.ones_like(confidence_bev) * valid_bev
+                )  # / valid_bev.sum((-1, -2))
+            pred["bev"]["output"] = f_bev
+
+        if "log_prior" in pred["map"]:
+            log_prior = pred["map"]["log_prior"][0] = torch.rot90(
+                pred_map["log_prior"][0], -1, dims=(-2, -1)
+            )
+
+        if not self.conf.ransac_matcher:  # OrienterNet's Exhaustive Matching
+
+            # Temporarily revert bev format. TODO: refactor template sampler.
+            f_bev = pred["bev"]["output"] = torch.rot90(f_bev, 1, dims=(-2, -1))
+            if confidence_bev is not None:
+                confidence_bev = pred["bev"]["confidence"] = torch.rot90(
+                    confidence_bev, 1, dims=(-2, -1)
+                )
+            valid_bev = torch.rot90(valid_bev, 1, dims=(-2, -1))
+
+            scores = self.exhaustive_voting(f_bev, f_map, valid_bev, confidence_bev)
+            scores = scores.moveaxis(1, -1)  # B,H,W,N
+            if "log_prior" in pred_map and self.conf.apply_map_prior:
+                scores = scores + log_prior.unsqueeze(-1)
+            # pred["scores_unmasked"] = scores.clone()
+            scores.masked_fill_(~map_mask[..., None], -np.inf)
+            if "yaw_prior" in data:  # TODO: refactor
+                mask_yaw_prior(scores, data["yaw_prior"], self.conf.num_rotations)
+            log_probs = log_softmax_spatial(scores)  # already rotated
+            with torch.no_grad():
+                uvr_max = argmax_xyr(scores).to(scores)
+                uvr_avg, _ = expectation_xyr(log_probs.exp())
+
+            # Convert rotated uv to ij
+            ij_max = torch.flip(uvr_max[..., :2], dims=[-1])
+            ij_avg = torch.flip(uvr_avg[..., :2], dims=[-1])
+            yaw_max = 180 - uvr_max[..., 2][..., None]
+            yaw_avg = 180 - uvr_avg[..., 2][..., None]
+            map_T_cam_max = Transform2D.from_degrees(yaw_max, ij_max)
+            map_T_cam_avg = Transform2D.from_degrees(yaw_avg, ij_avg)
+            resolution = 1 / data["pixels_per_meter"][..., None]
+            tile_T_cam_max = Transform2D.from_pixels(map_T_cam_max, resolution)
+            tile_T_cam_avg = Transform2D.from_pixels(map_T_cam_avg, resolution)
+
+            # TODO: Revert mem layout to snap's. Remove when template sampler is fixed
+            f_bev = pred["bev"]["output"] = torch.rot90(f_bev, -1, dims=(-2, -1))
+            if confidence_bev is not None:
+                confidence_bev = pred["bev"]["confidence"] = torch.rot90(
+                    confidence_bev, -1, dims=(-2, -1)
+                )
+            valid_bev = torch.rot90(valid_bev, -1, dims=(-2, -1))
+            pred["scores"] = scores
+            pred["log_probs"] = log_probs
+
+        else:  # SNAP's RANSAC matcher
+
+            sim_points, prob_points = self.compute_similarity(
+                f_bev, f_map, valid_bev, confidence_bev
+            )
+
+            map_T_cam_samples, pose_scores, bev_ij_pool, map_ij_pool, gt_pose_score = (
+                self.ransac_voting(
+                    sim_points, prob_points, valid_bev, map_mask, data["map_T_cam"]
+                )
+            )
+
+            _, max_indices = torch.max(pose_scores, dim=-1)
+            select_fn = torch.vmap(lambda x, i: x[i[None]][0])
+            map_T_cam_max = select_fn(map_T_cam_samples, max_indices)
+
+            if self.conf.ransac_grid_refinement:
+                pred["map_T_cam_ransac"] = map_T_cam_max
+                map_T_cam_max, pred["refined_score"], pred["scores_grid_refine"] = (
+                    grid_refinement_batched(
+                        map_T_cam_max, sim_points, self.bev_ij_pts, valid_bev, map_mask
+                    )
+                )
+
+            map_T_cam_max = Transform2D(map_T_cam_max)
+            resolution = 1 / data["pixels_per_meter"][..., None]
+            tile_T_cam_max = Transform2D.from_pixels(map_T_cam_max, resolution)
+
+            # Dummy
+            tile_T_cam_avg = tile_T_cam_max
+            map_T_cam_avg = map_T_cam_max
+            pred["log_probs"] = torch.zeros((1, 256, 256, 360))
+
+            pred.update(
+                {
+                    "bev_ij_pool": bev_ij_pool,
+                    "map_ij_pool": map_ij_pool,
+                    "map_T_cam_samples": map_T_cam_samples,
+                    "pose_scores": pose_scores,
+                    "max_indices": max_indices,
+                    "prob_points": prob_points,
+                    "gt_pose_score": gt_pose_score,
+                }
+            )
 
         return {
             **pred,
             "tile_T_cam_max": tile_T_cam_max,
-            "tile_T_cam_expectation": tile_T_cam_expectation,
+            "tile_T_cam_expectation": tile_T_cam_avg,
             "map_T_cam_max": map_T_cam_max,
             "map_T_cam_expectation": map_T_cam_avg,
-            "scores": scores,
-            "log_probs": log_probs,
             "features_image": f_image,
             "features_bev": f_bev,
             "valid_bev": valid_bev.squeeze(1),
@@ -224,9 +407,13 @@ class OrienterNet(BaseModel):
         # Revert refactored outputs to original
         ij_gt = data["map_T_cam"].t
         uv_gt = ij_gt.clone()
-        uv_gt[..., 1] = data["map"].shape[-2] - 1 - ij_gt[..., 1]
-        yaw_gt = 90 - data["map_T_cam"].angle.squeeze(-1)
-        log_probs = torch.rot90(pred["log_probs"], 1, dims=(-3, -2))
+        uv_gt = torch.flip(ij_gt, dims=[-1])
+        yaw_gt = (180 - data["map_T_cam"].angle.squeeze(-1)) % 360
+        log_probs = pred["log_probs"]
+
+        map_mask = data.get("map_mask")
+        if map_mask is not None:
+            map_mask = torch.rot90(map_mask, 1, dims=(-2, -1))
 
         if self.conf.do_label_smoothing:
             nll = nll_loss_xyr_smoothed(
