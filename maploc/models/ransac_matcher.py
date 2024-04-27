@@ -1,6 +1,7 @@
 from typing import Tuple
 
 import torch
+from torch.profiler import ProfilerActivity, profile, record_function
 
 from maploc.utils.wrappers import Transform2D
 
@@ -8,8 +9,9 @@ from maploc.utils.wrappers import Transform2D
 def sample_transforms_ransac(
     bev_ij_pts: torch.Tensor,  # IxJx2
     prob_points: torch.Tensor,  # NxHxW
-    num_poses: int = 5_000,
+    num_poses: int = 10_000,
     num_retries: int = 2,
+    profiler_mode: bool = False,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Randomly sample poses derived from the most confident correspondences"""
 
@@ -18,10 +20,29 @@ def sample_transforms_ransac(
 
     num_obs = 2  # num of observations per pose sample
 
-    # Sample correspondences
-    p = prob_points.cumsum(0)
-    sample_values = p[-1] * (1 - torch.rand(num_poses * num_retries * num_obs)).to(p)
-    indices = torch.searchsorted(p, sample_values)
+    if profiler_mode:
+        torch.cuda.reset_peak_memory_stats()
+        with profile(
+            activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+            profile_memory=True,
+        ) as prof:
+            with record_function("sampling"):
+                p = prob_points.cumsum(0)
+                sample_values = p[-1] * (
+                    1 - torch.rand(num_poses * num_retries * num_obs)
+                ).to(p)
+                indices = torch.searchsorted(p, sample_values)
+
+        cuda_time = prof.key_averages()[0].cuda_time / 1000
+        stats = torch.cuda.memory_stats()
+        peak_bytes = stats["allocated_bytes.all.peak"] / 1024**3
+        print(f"[sorted_sampling]: {cuda_time:.3f} ms, {peak_bytes:.2f} GB")
+    else:
+        p = prob_points.cumsum(0)
+        sample_values = p[-1] * (1 - torch.rand(num_poses * num_retries * num_obs)).to(
+            p
+        )
+        indices = torch.searchsorted(p, sample_values)
 
     indices = torch.stack(torch.unravel_index(indices, shape), -1)
     pool_shape = (num_poses, num_retries, num_obs, 2)
@@ -52,11 +73,29 @@ def sample_transforms_ransac(
         map_ij_pts_pool = map_ij_pts_pool.squeeze(1)
         bev_ij_pts_pool = bev_ij_pts_pool.squeeze(1)
 
-    map_R_cam, map_t_cam, _, _ = torch.vmap(kabsch_2d)(bev_ij_pts_pool, map_ij_pts_pool)
+    if profiler_mode:
+        torch.cuda.reset_peak_memory_stats()
+        with profile(
+            activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+            profile_memory=True,
+        ) as prof:
+            with record_function("kabsch"):
+                map_R_cam, map_t_cam, _, _ = torch.vmap(kabsch_2d)(
+                    bev_ij_pts_pool, map_ij_pts_pool
+                )
+                map_T_cam_samples = Transform2D.from_Rt(map_R_cam, map_t_cam)._data
 
-    map_T_cam_samples = Transform2D.from_Rt(
-        map_R_cam, map_t_cam
-    )._data  # vmap doesn't allow TensorWrappers
+        cuda_time = prof.key_averages()[0].cuda_time / 1000
+        stats = torch.cuda.memory_stats()
+        peak_bytes = stats["allocated_bytes.all.peak"] / 1024**3
+        print(f"[kabsch]: {cuda_time:.3f} ms, {peak_bytes:.2f} GB")
+    else:
+        map_R_cam, map_t_cam, _, _ = torch.vmap(kabsch_2d)(
+            bev_ij_pts_pool, map_ij_pts_pool
+        )
+        map_T_cam_samples = Transform2D.from_Rt(
+            map_R_cam, map_t_cam
+        )._data  # vmap doesn't allow TensorWrappers
 
     return map_T_cam_samples, bev_ij_pts_pool, map_ij_pts_pool
 
@@ -89,13 +128,14 @@ def kabsch_2d(
     return i_r_j, i_t_j, valid, rssd
 
 
+# @torch.jit.script
 def interpolate_nd(
     array: torch.Tensor,  # H, W, 1
     points: torch.Tensor,  # N D
     valid_array: torch.Tensor,
     padding_mode: str = "zeros",
     mode: str = "bilinear",
-) -> Tuple[torch.Tensor, torch.Tensor]:
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Interpolate an N-dimensional array at the given points."""
 
     size = torch.tensor(array.shape[-2:]).to(points)  # H, W
@@ -250,7 +290,7 @@ def test_kabsch_2d():
 
 sample_transforms_ransac_batched = torch.vmap(
     sample_transforms_ransac,
-    in_dims=(None,) * 1 + (0,) * 1 + (None,) * 2,
+    in_dims=(None,) * 1 + (0,) * 1 + (None,) * 3,
     randomness="different",
 )
 pose_scoring_many = torch.vmap(pose_scoring, in_dims=(0,) + (None,) * 4)

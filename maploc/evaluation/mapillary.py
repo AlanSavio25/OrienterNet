@@ -5,28 +5,31 @@ from pathlib import Path
 from typing import Optional, Tuple
 
 from omegaconf import DictConfig, OmegaConf
+from pytorch_lightning import seed_everything
 
 from .. import logger
 from ..conf import data as conf_data_dir
 from ..data import MapillaryDataModule
 from .run import evaluate
 
+seed_everything(25)  # best = 25
+
 split_overrides = {
     "val": {
         "scenes": [
-            "sanfrancisco_soma",
-            "sanfrancisco_hayes",
+            # "sanfrancisco_soma",
+            # "sanfrancisco_hayes",
             "amsterdam",
-            "berlin",
-            "lemans",
-            "montrouge",
-            "toulouse",
-            "nantes",
-            "vilnius",
-            "avignon",
-            "helsinki",
+            # "berlin",
+            # "lemans",
+            # "montrouge",
+            # "toulouse",
+            # "nantes",
+            # "vilnius",
+            # "avignon",
+            # "helsinki",
             "milan",
-            "paris",
+            # "paris",
         ],
     },
 }
@@ -35,7 +38,7 @@ data_cfg = OmegaConf.merge(
     data_cfg_train,
     {
         "return_gps": True,
-        "add_map_mask": True,
+        "add_map_mask": False,
         "max_init_error": 32,
         "loading": {"val": {"batch_size": 1, "num_workers": 0}},
     },

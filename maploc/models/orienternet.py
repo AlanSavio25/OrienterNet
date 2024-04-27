@@ -3,6 +3,7 @@
 import numpy as np
 import torch
 from torch.nn.functional import normalize
+from torch.profiler import ProfilerActivity, profile, record_function
 
 from maploc.models.ransac_matcher import (
     grid_refinement_batched,
@@ -17,7 +18,13 @@ from .base import BaseModel
 from .bev_net import BEVNet
 from .bev_projection import CartesianProjection, PolarProjectionDepth
 from .map_encoder import MapEncoder
-from .metrics import AngleError, AngleRecall, Location2DError, Location2DRecall
+from .metrics import (
+    AngleError,
+    AngleRecall,
+    Location2DError,
+    Location2DRecall,
+    SamplesRecall,
+)
 from .voting import (
     TemplateSampler,
     argmax_xyr,
@@ -54,9 +61,12 @@ class OrienterNet(BaseModel):
         "use_map_cutout": True,
         "ransac_matcher": True,
         "clip_negative_scores": True,
-        "num_pose_samples": 20_000,
+        "num_pose_samples": 10_000,
         "num_pose_sampling_retries": 8,
         "ransac_grid_refinement": True,
+        "profiler_mode": False,
+        "overall_profiler": False,
+        "compute_sim_relu_and_numvalid": False,
         # deprecated
         "depth_parameterization": "scale",
         "norm_depth_scores": False,
@@ -130,13 +140,48 @@ class OrienterNet(BaseModel):
         if confidence_bev is not None:
             f_bev = f_bev * confidence_bev.unsqueeze(1)
         f_bev = f_bev.masked_fill(~valid_bev.unsqueeze(1), 0.0)
-        templates = self.template_sampler(f_bev)
-        with torch.autocast("cuda", enabled=False):
-            scores = conv2d_fft_batchwise(
-                f_map.float(),
-                templates.float(),
-                padding_mode=self.conf.padding_matching,
+
+        if self.conf.profiler_mode:
+            torch.cuda.reset_peak_memory_stats()
+            with profile(
+                activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+                profile_memory=True,
+            ) as prof:
+                with record_function("exhaustive_template_sampler"):
+                    templates = self.template_sampler(f_bev)
+            cuda_time = prof.key_averages()[0].cuda_time / 1000
+            stats = torch.cuda.memory_stats()
+            peak_bytes = stats["allocated_bytes.all.peak"] / 1024**3
+            print(
+                f"[exhaustive_template_sampler]: {cuda_time:.3f} ms, {peak_bytes:.2f} GB"
             )
+        else:
+            templates = self.template_sampler(f_bev)
+
+        with torch.autocast("cuda", enabled=False):
+            if self.conf.profiler_mode:
+                torch.cuda.reset_peak_memory_stats()
+                with profile(
+                    activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+                    profile_memory=True,
+                ) as prof:
+                    with record_function("exhaustive_conv_fft"):
+                        scores = conv2d_fft_batchwise(
+                            f_map.float(),
+                            templates.float(),
+                            padding_mode=self.conf.padding_matching,
+                        )
+                cuda_time = prof.key_averages()[0].cuda_time / 1000
+                stats = torch.cuda.memory_stats()
+                peak_bytes = stats["allocated_bytes.all.peak"] / 1024**3
+                print(f"[exhaustive_conv_fft]: {cuda_time:.3f} ms, {peak_bytes:.2f} GB")
+            else:
+                scores = conv2d_fft_batchwise(
+                    f_map.float(),
+                    templates.float(),
+                    padding_mode=self.conf.padding_matching,
+                )
+
         if self.conf.add_temperature:
             scores = scores * torch.exp(self.temperature)
 
@@ -145,6 +190,7 @@ class OrienterNet(BaseModel):
         valid_templates = self.template_sampler(valid_bev.float()[None]) > (1 - 1e-4)
         num_valid = valid_templates.float().sum((-3, -2, -1))
         scores = scores / num_valid[..., None, None]
+
         return scores
 
     def compute_similarity(self, f_bev, f_map, valid_bev, confidence_bev=None):
@@ -153,27 +199,68 @@ class OrienterNet(BaseModel):
         if self.conf.normalize_features or self.conf.use_map_cutout:
             f_bev = normalize(f_bev, dim=1)
             f_map = normalize(f_map, dim=1)
+
         f_bev_points = f_bev.movedim(-3, -1).reshape(batch_size, -1, f_bev.shape[-3])
         f_map_points = f_map.movedim(-3, -1)  # channel to last dim
-        sim_points = torch.einsum("...nd,...ijd->...nij", f_bev_points, f_map_points)
 
-        if self.conf.clip_negative_scores:
-            sim_points = torch.nn.ReLU()(sim_points)
+        if self.conf.profiler_mode:
+            torch.cuda.reset_peak_memory_stats()
+            with profile(
+                activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+                profile_memory=True,
+            ) as prof:
+                with record_function("compute_similarity_einsum"):
+                    sim_points = torch.einsum(
+                        "...nd,...ijd->...nij", f_bev_points, f_map_points
+                    )
+            cuda_time = prof.key_averages()[0].cuda_time / 1000
+            stats = torch.cuda.memory_stats()
+            peak_bytes = stats["allocated_bytes.all.peak"] / 1024**3
+            print(
+                f"[compute_similarity_einsum]: {cuda_time:.3f} ms, {peak_bytes:.2f} GB"
+            )
+        else:
+            sim_points = torch.einsum(
+                "...nd,...ijd->...nij", f_bev_points, f_map_points
+            )
 
+        # if self.conf.clip_negative_scores:
+        if self.conf.compute_sim_relu_and_numvalid:
+            sim_points = torch.nn.functional.relu(sim_points)
         if self.conf.add_temperature:
             sim_points *= torch.exp(self.temperature)
 
-        sim_points = sim_points * valid_bev.reshape(batch_size, -1)[..., None, None]
-        prob_points = torch.nn.Softmax(dim=-1)(
-            sim_points.view(*sim_points.shape[:-2], -1)
-        ).view(*sim_points.shape)
+        if self.conf.profiler_mode:
+            torch.cuda.reset_peak_memory_stats()
+            with profile(
+                activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+                profile_memory=True,
+            ) as prof:
+                with record_function("compute_similarity_softmax"):
+                    prob_points = torch.nn.functional.softmax(
+                        sim_points.view(*sim_points.shape[:-2], -1), dim=-1
+                    ).view(*sim_points.shape)
+            cuda_time = prof.key_averages()[0].cuda_time / 1000
+            stats = torch.cuda.memory_stats()
+            peak_bytes = stats["allocated_bytes.all.peak"] / 1024**3
+            print(
+                f"[compute_similarity_softmax]: {cuda_time:.3f} ms, {peak_bytes:.2f} GB"
+            )
+        else:
+            prob_points = torch.nn.functional.softmax(
+                sim_points.view(*sim_points.shape[:-2], -1), dim=-1
+            ).view(*sim_points.shape)
+
         prob_points = prob_points * valid_bev.reshape(batch_size, -1)[..., None, None]
 
-        num_valid = (
-            valid_bev.reshape(batch_size, -1).sum(-1).clamp(min=1)[:, None, None, None]
-        )
-        sim_points /= num_valid
-        prob_points /= num_valid
+        if self.conf.compute_sim_relu_and_numvalid:
+            num_valid = (
+                valid_bev.reshape(batch_size, -1)
+                .sum(-1)
+                .clamp(min=1)[:, None, None, None]
+            )
+            sim_points /= num_valid
+            prob_points /= num_valid  # Probably not needed as cumsum searchsorted works without weights adding to 1
 
         return sim_points, prob_points
 
@@ -189,12 +276,14 @@ class OrienterNet(BaseModel):
         num_iter = self.conf.num_pose_samples // 5_000
 
         for i in range(num_iter):
+
             map_T_cam_samples_sub, bev_ij_pool_sub, map_ij_pool_sub = (
                 sample_transforms_ransac_batched(
                     self.bev_ij_pts,
                     prob_points.detach(),
                     5_000,
                     self.conf.num_pose_sampling_retries,
+                    self.conf.profiler_mode,
                 )
             )
 
@@ -203,13 +292,33 @@ class OrienterNet(BaseModel):
                     map_T_cam_gt._data.unsqueeze(1), map_T_cam_samples_sub
                 )
 
-            pose_scores_sub = pose_scoring_many_batched(
-                map_T_cam_samples_sub,  # B,num_poses,3
-                sim_points,
-                self.bev_ij_pts,  # I, J, 2
-                valid_bev,
-                map_mask,
-            )
+            if self.conf.profiler_mode:
+                torch.cuda.reset_peak_memory_stats()
+                with profile(
+                    activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+                    profile_memory=True,
+                ) as prof:
+                    with record_function("pose_scoring"):
+                        pose_scores_sub = pose_scoring_many_batched(
+                            map_T_cam_samples_sub,  # B,num_poses,3
+                            sim_points,
+                            self.bev_ij_pts,  # I, J, 2
+                            valid_bev,
+                            map_mask,
+                        )
+                cuda_time = prof.key_averages()[0].cuda_time / 1000
+                stats = torch.cuda.memory_stats()
+                peak_bytes = stats["allocated_bytes.all.peak"] / 1024**3
+                print(f"[pose_scoring]: {cuda_time:.3f} ms, {peak_bytes:.2f} GB")
+            else:
+                pose_scores_sub = pose_scoring_many_batched(
+                    map_T_cam_samples_sub,  # B,num_poses,3
+                    sim_points,
+                    self.bev_ij_pts,  # I, J, 2
+                    valid_bev,
+                    map_mask,
+                )
+
             if i == 0:
                 # Extract gt pose score and remove from poses
                 gt_pose_score = pose_scores_sub[..., 0]
@@ -313,6 +422,7 @@ class OrienterNet(BaseModel):
             valid_bev = torch.rot90(valid_bev, 1, dims=(-2, -1))
 
             scores = self.exhaustive_voting(f_bev, f_map, valid_bev, confidence_bev)
+
             scores = scores.moveaxis(1, -1)  # B,H,W,N
             if "log_prior" in pred_map and self.conf.apply_map_prior:
                 scores = scores + log_prior.unsqueeze(-1)
@@ -363,16 +473,54 @@ class OrienterNet(BaseModel):
             map_T_cam_max = select_fn(map_T_cam_samples, max_indices)
 
             if self.conf.ransac_grid_refinement:
-                pred["map_T_cam_ransac"] = map_T_cam_max
-                map_T_cam_max, pred["refined_score"], pred["scores_grid_refine"] = (
-                    grid_refinement_batched(
-                        map_T_cam_max, sim_points, self.bev_ij_pts, valid_bev, map_mask
+                if self.conf.profiler_mode:
+                    torch.cuda.reset_peak_memory_stats()
+                    with profile(
+                        activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+                        profile_memory=True,
+                    ) as prof:
+                        with record_function("grid_refinement"):
+                            pred["map_T_cam_ransac"] = map_T_cam_max
+                            (
+                                map_T_cam_max,
+                                pred["refined_score"],
+                                pred["scores_grid_refine"],
+                            ) = grid_refinement_batched(
+                                map_T_cam_max,
+                                sim_points,
+                                self.bev_ij_pts,
+                                valid_bev,
+                                map_mask,
+                            )
+
+                    cuda_time = prof.key_averages()[0].cuda_time / 1000
+                    stats = torch.cuda.memory_stats()
+                    peak_bytes = stats["allocated_bytes.all.peak"] / 1024**3
+                    print(f"[grid_refinement]: {cuda_time:.3f} ms, {peak_bytes:.2f} GB")
+
+                else:
+                    pred["map_T_cam_ransac"] = map_T_cam_max
+                    (
+                        map_T_cam_max,
+                        pred["refined_score"],
+                        pred["scores_grid_refine"],
+                    ) = grid_refinement_batched(
+                        map_T_cam_max,
+                        sim_points,
+                        self.bev_ij_pts,
+                        valid_bev,
+                        map_mask,
                     )
-                )
 
             map_T_cam_max = Transform2D(map_T_cam_max)
             resolution = 1 / data["pixels_per_meter"][..., None]
             tile_T_cam_max = Transform2D.from_pixels(map_T_cam_max, resolution)
+            tile_T_cam_samples = Transform2D.from_pixels(
+                Transform2D(map_T_cam_samples), resolution
+            )
+
+            # TODO: if we want to apply map prior, then we need to grid sample the
+            # logprob at sampled pose locations
 
             # Dummy
             tile_T_cam_avg = tile_T_cam_max
@@ -384,6 +532,7 @@ class OrienterNet(BaseModel):
                     "bev_ij_pool": bev_ij_pool,
                     "map_ij_pool": map_ij_pool,
                     "map_T_cam_samples": map_T_cam_samples,
+                    "tile_T_cam_samples": tile_T_cam_samples,
                     "pose_scores": pose_scores,
                     "max_indices": max_indices,
                     "prob_points": prob_points,
@@ -432,7 +581,23 @@ class OrienterNet(BaseModel):
         return loss
 
     def metrics(self):
+        ransac_only_metrics = {}
+        if self.conf.ransac_matcher:
+            ransac_only_metrics["samples_recall_8m_10°"] = SamplesRecall(
+                xy_thresh=8, yaw_thresh=5, key="tile_T_cam_samples"
+            )
+            ransac_only_metrics["samples_recall_8m_5°"] = SamplesRecall(
+                xy_thresh=8, yaw_thresh=5, key="tile_T_cam_samples"
+            )
+            ransac_only_metrics["samples_recall_4m_10°"] = SamplesRecall(
+                xy_thresh=4, yaw_thresh=5, key="tile_T_cam_samples"
+            )
+            ransac_only_metrics["samples_recall_4m_5°"] = SamplesRecall(
+                xy_thresh=4, yaw_thresh=5, key="tile_T_cam_samples"
+            )
+
         return {
+            **ransac_only_metrics,
             "xy_max_error": Location2DError("tile_T_cam_max"),
             "xy_expectation_error": Location2DError("tile_T_cam_expectation"),
             "yaw_max_error": AngleError("tile_T_cam_max"),

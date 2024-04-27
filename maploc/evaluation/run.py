@@ -9,6 +9,7 @@ import numpy as np
 import torch
 from omegaconf import DictConfig, OmegaConf
 from pytorch_lightning import seed_everything
+from torch.profiler import ProfilerActivity, profile, record_function
 from torchmetrics import MetricCollection
 from tqdm import tqdm
 
@@ -77,7 +78,31 @@ def evaluate_single_image(
         if mask_index is not None:
             mask = batch["map"][0, mask_index[0]] == (mask_index[1] + 1)
             batch["map"][0, mask_index[0]][mask] = 0
-        pred = model(batch)
+        if model.cfg.model.overall_profiler:
+            text = (
+                "exhaustive_matching_model"
+                if model.cfg.model.ransac_matcher
+                else "ransac_matching_model"
+            )
+            torch.cuda.reset_peak_memory_stats()
+            with profile(
+                activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+                profile_memory=True,
+            ) as prof:
+                with record_function(text):
+                    pred = model(batch)
+            cuda_time = prof.key_averages()[0].cuda_time / 1000
+            stats = torch.cuda.memory_stats()
+            peak_bytes = stats["allocated_bytes.all.peak"] / 1024**3
+            print(f"[{text}]: {cuda_time:.3f} ms, {peak_bytes:.2f} GB")
+        else:
+            pred = model(batch)
+
+        # if measuring time, then kill after 10 items.
+        if model.cfg.model.profiler_mode or model.cfg.model.overall_profiler:
+            if i > 10:
+                print(f"10 iters complete. Time and memory ready to record. Exiting")
+                exit()
 
         if has_gps:
             map_t_gps = pred["map_t_gps"] = batch["map_t_gps"]

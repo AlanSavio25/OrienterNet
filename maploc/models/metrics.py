@@ -47,6 +47,26 @@ class AngleRecall(torchmetrics.MeanMetric):
         super().update((error <= self.threshold).float())
 
 
+class SamplesRecall(torchmetrics.MeanMetric):
+    def __init__(
+        self, xy_thresh, yaw_thresh, key="tile_T_cam_samples", *args, **kwargs
+    ):
+        self.xy_thresh = xy_thresh
+        self.yaw_thresh = yaw_thresh
+        self.key = key
+        super().__init__(*args, **kwargs)
+
+    def update(self, pred, data):
+        gt = data["tile_T_cam"]
+        samples = pred[self.key]
+        if not isinstance(samples, Transform2D):
+            samples = Transform2D(samples)
+        dr, dt = (samples.inv() @ gt).magnitude()
+        super().update(
+            ((dr <= self.yaw_thresh).squeeze(-1) & (dt <= self.xy_thresh)).float()
+        )
+
+
 class MeanMetricWithRecall(torchmetrics.Metric):
     full_state_update = True
 
