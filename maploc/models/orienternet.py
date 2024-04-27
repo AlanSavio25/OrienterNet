@@ -267,74 +267,72 @@ class OrienterNet(BaseModel):
     def ransac_voting(self, sim_points, prob_points, valid_bev, map_mask, map_T_cam_gt):
         """Sample correspondence pairs, compute poses, and score poses"""
 
-        pose_scores = []
-        map_T_cam_samples = []
-        bev_ij_pool = []
-        map_ij_pool = []
+        # pose_scores = []
+        # map_T_cam_samples = []
+        # bev_ij_pool = []
+        # map_ij_pool = []
 
         # Temp. work-around for scoring large num of samples with small GPU
-        num_iter = self.conf.num_pose_samples // 5_000
+        # num_iter = self.conf.num_pose_samples // 5_000
 
-        for i in range(num_iter):
+        # for i in range(num_iter):
 
-            map_T_cam_samples_sub, bev_ij_pool_sub, map_ij_pool_sub = (
-                sample_transforms_ransac_batched(
-                    self.bev_ij_pts,
-                    prob_points.detach(),
-                    5_000,
-                    self.conf.num_pose_sampling_retries,
-                    self.conf.profiler_mode,
-                )
+        map_T_cam_samples, bev_ij_pool, map_ij_pool = sample_transforms_ransac_batched(
+            self.bev_ij_pts,
+            prob_points.detach(),
+            self.conf.num_pose_samples,  # 5_000,
+            self.conf.num_pose_sampling_retries,
+            self.conf.profiler_mode,
+        )
+
+        # if i == 0:
+        map_T_cam_samples = torch.vmap(lambda *x: torch.cat(x, 0))(
+            map_T_cam_gt._data.unsqueeze(1), map_T_cam_samples
+        )
+
+        if self.conf.profiler_mode:
+            torch.cuda.reset_peak_memory_stats()
+            with profile(
+                activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+                profile_memory=True,
+            ) as prof:
+                with record_function("pose_scoring"):
+                    pose_scores = pose_scoring_many_batched(
+                        map_T_cam_samples,  # B,num_poses,3
+                        sim_points,
+                        self.bev_ij_pts,  # I, J, 2
+                        valid_bev,
+                        map_mask,
+                    )
+            cuda_time = prof.key_averages()[0].cuda_time / 1000
+            stats = torch.cuda.memory_stats()
+            peak_bytes = stats["allocated_bytes.all.peak"] / 1024**3
+            print(f"[pose_scoring]: {cuda_time:.3f} ms, {peak_bytes:.2f} GB")
+        else:
+            pose_scores = pose_scoring_many_batched(
+                map_T_cam_samples,  # B,num_poses,3
+                sim_points,
+                self.bev_ij_pts,  # I, J, 2
+                valid_bev,
+                map_mask,
             )
 
-            if i == 0:
-                map_T_cam_samples_sub = torch.vmap(lambda *x: torch.cat(x, 0))(
-                    map_T_cam_gt._data.unsqueeze(1), map_T_cam_samples_sub
-                )
+        # if i == 0:
+        # Extract gt pose score and remove from poses
+        gt_pose_score = pose_scores[..., 0]
+        pose_scores = pose_scores[..., 1:]
+        map_T_cam_samples = map_T_cam_samples[..., 1:, :]
 
-            if self.conf.profiler_mode:
-                torch.cuda.reset_peak_memory_stats()
-                with profile(
-                    activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
-                    profile_memory=True,
-                ) as prof:
-                    with record_function("pose_scoring"):
-                        pose_scores_sub = pose_scoring_many_batched(
-                            map_T_cam_samples_sub,  # B,num_poses,3
-                            sim_points,
-                            self.bev_ij_pts,  # I, J, 2
-                            valid_bev,
-                            map_mask,
-                        )
-                cuda_time = prof.key_averages()[0].cuda_time / 1000
-                stats = torch.cuda.memory_stats()
-                peak_bytes = stats["allocated_bytes.all.peak"] / 1024**3
-                print(f"[pose_scoring]: {cuda_time:.3f} ms, {peak_bytes:.2f} GB")
-            else:
-                pose_scores_sub = pose_scoring_many_batched(
-                    map_T_cam_samples_sub,  # B,num_poses,3
-                    sim_points,
-                    self.bev_ij_pts,  # I, J, 2
-                    valid_bev,
-                    map_mask,
-                )
+        # pose_scores.append(pose_scores_sub)
+        # map_T_cam_samples.append(map_T_cam_samples_sub)
+        # bev_ij_pool.append(bev_ij_pool_sub)
+        # map_ij_pool.append(map_ij_pool_sub)
 
-            if i == 0:
-                # Extract gt pose score and remove from poses
-                gt_pose_score = pose_scores_sub[..., 0]
-                pose_scores_sub = pose_scores_sub[..., 1:]
-                map_T_cam_samples_sub = map_T_cam_samples_sub[..., 1:, :]
-
-            pose_scores.append(pose_scores_sub)
-            map_T_cam_samples.append(map_T_cam_samples_sub)
-            bev_ij_pool.append(bev_ij_pool_sub)
-            map_ij_pool.append(map_ij_pool_sub)
-
-        batch_size = len(sim_points)
-        pose_scores = torch.stack(pose_scores, -1).view(batch_size, -1)
-        map_T_cam_samples = torch.stack(map_T_cam_samples, -2).view(batch_size, -1, 3)
-        bev_ij_pool = torch.stack(bev_ij_pool, -3).view(batch_size, -1, 2, 2)
-        map_ij_pool = torch.stack(map_ij_pool, -3).view(batch_size, -1, 2, 2)
+        # batch_size = len(sim_points)
+        # pose_scores = torch.stack(pose_scores, -1).view(batch_size, -1)
+        # map_T_cam_samples = torch.stack(map_T_cam_samples, -2).view(batch_size, -1, 3)
+        # bev_ij_pool = torch.stack(bev_ij_pool, -3).view(batch_size, -1, 2, 2)
+        # map_ij_pool = torch.stack(map_ij_pool, -3).view(batch_size, -1, 2, 2)
 
         # Invalidate poses that fall outside the map bounds
         map_t_cam_samples = map_T_cam_samples[..., 1:]
