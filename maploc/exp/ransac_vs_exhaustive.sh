@@ -28,10 +28,10 @@ echo "<<<Finished Exhaustive Matching experiments"
 echo "===Starting Ransac Matching experiments>>>"
 
 # Ransac
-num_pose_samples=(5000) #10000 20000 30000)
+num_pose_samples=(5000 10000 20000 30000)
 # num_pose_sampling_retries=(2 4 8 12)
-crop_size_meters=(112) # 112 128)
-ransac_grid_refinement=(True) #  False) # TODO: change grid boundaries
+crop_size_meters=(64 112 128)
+ransac_grid_refinement=(True False)
 
 for nps in "${num_pose_samples[@]}"
 do
@@ -41,7 +41,6 @@ do
         do
             for profiler_mode in "${profiler_modes[@]}"
             do
-                echo "gr: $gr"
                 command="python -m maploc.evaluation.mapillary --experiment OrienterNet_MGL \
                 model.apply_map_prior=False data.scenes=['amsterdam','milan'] \
                 model.ransac_matcher=True model.profiler_mode=$profiler_mode \
