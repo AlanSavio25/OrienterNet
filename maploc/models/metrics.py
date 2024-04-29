@@ -63,8 +63,72 @@ class SamplesRecall(torchmetrics.MeanMetric):
             samples = Transform2D(samples)
         dr, dt = (samples.inv() @ gt).magnitude()
         super().update(
-            ((dr <= self.yaw_thresh).squeeze(-1) & (dt <= self.xy_thresh)).float()
+            ((dr <= self.yaw_thresh).squeeze(-1) & (dt <= self.xy_thresh))
+            .float()
+            .mean()
         )
+
+
+class ExhaustiveEntropy(torchmetrics.MeanMetric):
+    def __init__(self, key="log_probs", *args, **kwargs):
+        self.key = key
+        super().__init__(*args, **kwargs)
+
+    def update(self, pred, data):
+        log_probs = pred[self.key]
+        num_bins = int(1e8)
+        hist = torch.histc(log_probs.flatten().exp(), bins=num_bins, min=0, max=1)
+        probs = hist / (hist.sum() + 1e-9)
+        entropy = -torch.sum(probs * (probs + 1e-9).log())
+        super().update(entropy.float())
+
+
+class RansacPointDistributionEntropy(torchmetrics.MeanMetric):
+    def __init__(self, key="prob_points", *args, **kwargs):
+        self.key = key
+        super().__init__(*args, **kwargs)
+
+    def update(self, pred, data):
+        prob_points = pred[self.key].sum(-3)
+        num_bins = int(1e8)
+        prob_points = prob_points / prob_points.sum()  # make probs add to 1
+        hist = torch.histc(prob_points.flatten(), bins=num_bins, min=0, max=1)
+        probs = hist / (hist.sum() + 1e-9)
+        entropy = -torch.sum(probs * (probs + 1e-9).log())
+        super().update(entropy.float())
+
+
+class RansacPoseDistributionEntropy(torchmetrics.MeanMetric):
+    def __init__(self, key="pose_scores", *args, **kwargs):
+        self.key = key
+        super().__init__(*args, **kwargs)
+
+    def update(self, pred, data):
+        pose_scores = pred[self.key]
+        pose_scores = pose_scores[pose_scores > 0]
+        num_bins = int(1e3)
+        hist = torch.histc(
+            pose_scores.flatten(),
+            bins=num_bins,
+            min=0,
+            max=pred["gt_pose_score"].squeeze().item(),
+        )
+        probs = hist / (hist.sum() + 1e-9)
+        entropy = -torch.sum(probs * (probs + 1e-9).log())
+        super().update(entropy.float())
+
+
+class RansacPoseScoresMean(torchmetrics.MeanMetric):
+    def __init__(self, key="pose_scores", *args, **kwargs):
+        self.key = key
+        super().__init__(*args, **kwargs)
+
+    def update(self, pred, data):
+        pose_scores = pred[self.key]
+        pose_scores = pose_scores[pose_scores > 0]
+        pose_scores /= pred["gt_pose_score"]  # scores in range [0,1]
+        mean = pose_scores.mean()
+        super().update(mean.float())
 
 
 class MeanMetricWithRecall(torchmetrics.Metric):

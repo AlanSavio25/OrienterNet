@@ -21,8 +21,12 @@ from .map_encoder import MapEncoder
 from .metrics import (
     AngleError,
     AngleRecall,
+    ExhaustiveEntropy,
     Location2DError,
     Location2DRecall,
+    RansacPointDistributionEntropy,
+    RansacPoseDistributionEntropy,
+    RansacPoseScoresMean,
     SamplesRecall,
 )
 from .voting import (
@@ -61,9 +65,9 @@ class OrienterNet(BaseModel):
         "use_map_cutout": True,
         "ransac_matcher": True,
         "clip_negative_scores": True,
-        "num_pose_samples": 10_000,
+        "num_pose_samples": 2000,
         "num_pose_sampling_retries": 8,
-        "ransac_grid_refinement": True,
+        "ransac_grid_refinement": False,
         "profiler_mode": False,
         "overall_profiler": False,
         "compute_sim_relu_and_numvalid": False,
@@ -579,23 +583,23 @@ class OrienterNet(BaseModel):
         return loss
 
     def metrics(self):
-        ransac_only_metrics = {}
+        metrics = {}
         if self.conf.ransac_matcher:
-            ransac_only_metrics["samples_recall_8m_10°"] = SamplesRecall(
-                xy_thresh=8, yaw_thresh=5, key="tile_T_cam_samples"
+            metrics["samples_recall_8m_10°"] = SamplesRecall(xy_thresh=8, yaw_thresh=5)
+            metrics["samples_recall_8m_5°"] = SamplesRecall(xy_thresh=8, yaw_thresh=5)
+            metrics["samples_recall_4m_10°"] = SamplesRecall(xy_thresh=4, yaw_thresh=5)
+            metrics["samples_recall_4m_5°"] = SamplesRecall(xy_thresh=4, yaw_thresh=5)
+            metrics["samples_mean_recall_3m_6°"] = SamplesRecall(
+                xy_thresh=3, yaw_thresh=6
             )
-            ransac_only_metrics["samples_recall_8m_5°"] = SamplesRecall(
-                xy_thresh=8, yaw_thresh=5, key="tile_T_cam_samples"
-            )
-            ransac_only_metrics["samples_recall_4m_10°"] = SamplesRecall(
-                xy_thresh=4, yaw_thresh=5, key="tile_T_cam_samples"
-            )
-            ransac_only_metrics["samples_recall_4m_5°"] = SamplesRecall(
-                xy_thresh=4, yaw_thresh=5, key="tile_T_cam_samples"
-            )
+            metrics["mean_pose_scores"] = RansacPoseScoresMean()
+            metrics["pose_scores_entropy"] = RansacPoseDistributionEntropy()
+            metrics["map_points_entropy"] = RansacPointDistributionEntropy()
+        else:
+            metrics["exhaustive_entropy"] = ExhaustiveEntropy()
 
         return {
-            **ransac_only_metrics,
+            **metrics,
             "xy_max_error": Location2DError("tile_T_cam_max"),
             "xy_expectation_error": Location2DError("tile_T_cam_expectation"),
             "yaw_max_error": AngleError("tile_T_cam_max"),
