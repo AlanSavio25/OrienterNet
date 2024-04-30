@@ -81,7 +81,7 @@ def evaluate_single_image(
         if model.cfg.model.overall_profiler:
             text = (
                 "exhaustive_matching_model"
-                if model.cfg.model.ransac_matcher
+                if not model.cfg.model.ransac_matcher
                 else "ransac_matching_model"
             )
             torch.cuda.reset_peak_memory_stats()
@@ -287,6 +287,31 @@ def evaluate(
 
     results = metrics.compute()
     logger.info("All results: %s", results)
+    csm = cfg.data.crop_size_meters * 4
+    num_poses = cfg.model.num_pose_samples
+    gr = cfg.model.ransac_grid_refinement
+
+    keys = [
+        "xy_recall_1m",
+        "xy_recall_3m",
+        "xy_recall_5m",
+        "yaw_recall_1°",
+        "yaw_recall_3°",
+        "yaw_recall_5°",
+    ]
+    errors = ["xy_max_error", "yaw_max_error"]
+    extrakeys = [
+        "mean_pose_scores",
+        "pose_scores_entropy",
+        "samples_mean_recall_3m_6°",
+        "samples_recall_4m_5°",
+        "samples_recall_8m_10°",
+        "map_points_entropy",
+    ]
+
+    print(
+        f"{num_poses, csm, gr, *[(results[k]*100).numpy().round(2) for k in keys], *[results[k].numpy().round(2) for k in errors], *[results[k].double().numpy().round(4) for k in extrakeys]}"
+    )
     if output_dir is not None:
         write_dump(output_dir, experiment, cfg, results, metrics)
         logger.info("Outputs have been written to %s.", output_dir)

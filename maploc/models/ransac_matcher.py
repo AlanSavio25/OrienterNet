@@ -226,10 +226,10 @@ def grid_refinement(
 ):
     """Score poses distributed on a regular grid centered at an initial pose"""
 
-    delta_p = 0.4  # px
-    delta_r = 0.25
-    range_p = 8  # px
-    range_r = 5
+    delta_p = 1.0  # px
+    delta_r = 0.5
+    range_p = 8.0  # px
+    range_r = 5.0
 
     p_vals = torch.arange(-range_p, range_p + delta_p, delta_p)
     r_vals = torch.arange(-range_r, range_r + delta_r, delta_r)
