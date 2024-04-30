@@ -63,9 +63,7 @@ class SamplesRecall(torchmetrics.MeanMetric):
             samples = Transform2D(samples)
         dr, dt = (samples.inv() @ gt).magnitude()
         super().update(
-            ((dr <= self.yaw_thresh).squeeze(-1) & (dt <= self.xy_thresh))
-            .float()
-            .mean()
+            ((dr <= self.yaw_thresh).squeeze(-1) & (dt <= self.xy_thresh)).float().sum()
         )
 
 
