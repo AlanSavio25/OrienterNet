@@ -76,11 +76,11 @@ class ExhaustiveEntropy(torchmetrics.MeanMetric):
 
     def update(self, pred, data):
         log_probs = pred[self.key]
-        num_bins = int(1e8)
-        hist = torch.histc(log_probs.flatten().exp(), bins=num_bins, min=0, max=1)
-        probs = hist / (hist.sum() + 1e-9)
+        probs = log_probs.exp()
         entropy = -torch.sum(probs * (probs + 1e-9).log())
-        super().update(entropy.float())
+        n = torch.prod(torch.tensor(probs.shape)).to(entropy)
+        norm_entropy = entropy / torch.log(n)  # between 0 and 1
+        super().update(norm_entropy.float())
 
 
 class RansacPointDistributionEntropy(torchmetrics.MeanMetric):
@@ -89,13 +89,12 @@ class RansacPointDistributionEntropy(torchmetrics.MeanMetric):
         super().__init__(*args, **kwargs)
 
     def update(self, pred, data):
-        prob_points = pred[self.key].sum(-3)
-        num_bins = int(1e8)
-        prob_points = prob_points / prob_points.sum()  # make probs add to 1
-        hist = torch.histc(prob_points.flatten(), bins=num_bins, min=0, max=1)
-        probs = hist / (hist.sum() + 1e-9)
+        probs = pred[self.key].sum(-3)
+        probs = probs / probs.sum()  # make probs add to 1
         entropy = -torch.sum(probs * (probs + 1e-9).log())
-        super().update(entropy.float())
+        n = torch.prod(torch.tensor(probs.shape)).to(entropy)
+        norm_entropy = entropy / torch.log(n)
+        super().update(norm_entropy.float())
 
 
 class RansacPoseDistributionEntropy(torchmetrics.MeanMetric):
@@ -115,7 +114,9 @@ class RansacPoseDistributionEntropy(torchmetrics.MeanMetric):
         )
         probs = hist / (hist.sum() + 1e-9)
         entropy = -torch.sum(probs * (probs + 1e-9).log())
-        super().update(entropy.float())
+        n = torch.tensor(len(probs))
+        norm_entropy = entropy / torch.log(n)
+        super().update(norm_entropy.float())
 
 
 class RansacPoseScoresMean(torchmetrics.MeanMetric):
