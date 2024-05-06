@@ -17,7 +17,7 @@ from .base import BaseModel
 from .bev_net import BEVNet
 from .bev_projection import CartesianProjection, PolarProjectionDepth
 from .map_encoder import MapEncoder
-from .metrics import AngleError, AngleRecall, Location2DError, Location2DRecall
+from .metrics import AngleError, AngleRecall, Location2DError, Location2DRecall, ExhaustiveEntropy
 from .voting import (
     TemplateSampler,
     argmax_xyr,
@@ -51,12 +51,12 @@ class OrienterNet(BaseModel):
         "do_label_smoothing": False,
         "sigma_xy": 1,
         "sigma_r": 2,
-        "use_map_cutout": True,
-        "ransac_matcher": True,
-        "clip_negative_scores": True,
-        "num_pose_samples": 20_000,
+        "use_map_cutout": False,
+        "ransac_matcher": False,
+        "clip_negative_scores": False,
+        "num_pose_samples": 10_000,
         "num_pose_sampling_retries": 8,
-        "ransac_grid_refinement": True,
+        "ransac_grid_refinement": False,
         # deprecated
         "depth_parameterization": "scale",
         "norm_depth_scores": False,
@@ -432,7 +432,12 @@ class OrienterNet(BaseModel):
         return loss
 
     def metrics(self):
+        metrics = {}
+        if not self.conf.ransac_matcher:
+            metrics["exhaustive_entropy"] = ExhaustiveEntropy()
+
         return {
+            **metrics,
             "xy_max_error": Location2DError("tile_T_cam_max"),
             "xy_expectation_error": Location2DError("tile_T_cam_expectation"),
             "yaw_max_error": AngleError("tile_T_cam_max"),
