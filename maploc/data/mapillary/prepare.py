@@ -381,7 +381,7 @@ def process_location(
     plotter.fig.write_html(geo_viz_path)
     logger.info("Wrote split visualization to %s.", geo_viz_path)
 
-    #shutil.rmtree(raw_image_dir)
+    shutil.rmtree(raw_image_dir)
     logger.info("Done processing for location %s.", location)
 
 
