@@ -13,14 +13,15 @@ scenes:
   - helsinki
   - milan
   - paris
+return_gps: true
 split: splits_MGL_13loc.json
 loading:
   train:
-    batch_size: 12
-    num_workers: ${.batch_size}
+    batch_size: 4 # 12
+    num_workers: 4 # ${.batch_size}
   val:
-    batch_size: ${..train.batch_size}
-    num_workers: ${.batch_size}
+    batch_size: 1 # ${..train.batch_size}
+    num_workers: 1 # ${.batch_size}
 # map data
 num_classes:
   areas: 7
@@ -29,7 +30,7 @@ num_classes:
 pixel_per_meter: 2
 crop_size_meters: 64
 max_init_error: 48
-add_map_mask: true
+add_map_mask: false # true
 # preprocessing
 resize_image: 512
 pad_to_square: true

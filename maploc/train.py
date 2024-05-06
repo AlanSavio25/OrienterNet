@@ -148,7 +148,7 @@ def train(cfg: DictConfig, job_id: Optional[int] = None):
     )
     checkpointing_step.CHECKPOINT_NAME_LAST = "last-step"
 
-    strategy = None
+    strategy = 'auto'
     if cfg.experiment.gpus > 1:
         strategy = pl.strategies.DDPStrategy(find_unused_parameters=False)
         for split in ["train", "val"]:
