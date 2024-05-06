@@ -3,6 +3,9 @@
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+import io
+from torchvision.transforms.functional import to_tensor
+from PIL import Image
 
 from ..osm.viz import Colormap, plot_nodes
 from ..utils.io import write_torch_image
@@ -28,15 +31,18 @@ def plot_example_single(
     show_fused=False,
     show_dir_error=False,
     show_masked_prob=False,
+    return_plots=False
 ):
 
     # map_T_cam (or m_T_c): Transform of cam in pixel space.
     # map_t_cam (or m_t_c): only translation.
     # m_r_c (yaw): only rotation. East-facing, counter-clockwise rotation
+    plots = []
 
     scene, name, rasters, map_T_cam_gt = (
         data[k] for k in ("scene", "name", "map", "map_T_cam")
     )
+    # aerial_map = data["aerial_map"]
 
     m_t_c_gt = map_T_cam_gt.t.squeeze(0)  # ij_gt
     yaw_gt = map_T_cam_gt.angle.squeeze(0)  # m_r_c_gt
@@ -82,15 +88,21 @@ def plot_example_single(
         text1 += rf',  $\Delta xy_{{GPS}}$: {results["xy_gps_error"]:.1f}m'
 
     map_viz = Colormap.apply(rasters)
+    # aerial_map = aerial_map.permute(1, 2, 0) / 255.0
+
     overlay = likelihood_overlay(prob.numpy(), map_viz.mean(-1, keepdims=True))
 
     map_viz, overlay, feats_map_rgb = [
         np.swapaxes(x, 0, 1) for x in (map_viz, overlay, feats_map_rgb)
     ]
+    # aerial_map = np.swapaxes(aerial_map, 0, 1)
     plot_images(
         [image, map_viz, overlay, feats_map_rgb],
-        titles=[text1, "map", "likelihood", "neural map"],
+        # [image, map_viz, aerial_map, overlay, feats_map_rgb],
+        titles=[text1, "osm map", "likelihood", "neural map"],
+        # titles=[text1, "osm map", "aerial_map", "likelihood", "neural map"],
         origins=["upper", "lower", "lower", "lower"],
+        # origins=["upper", "lower", "lower", "lower", "lower"],
         dpi=75,
         cmaps="jet",
     )
@@ -106,7 +118,7 @@ def plot_example_single(
     plot_pose([1], m_t_c_gt, yaw_gt, c="red", refactored=True)
     plot_pose([1], m_t_c_pred, yaw_p, c="k", refactored=True)
     plot_dense_rotations(2, lp_ijt.exp(), refactored=True)
-    inset_center = m_t_c_pred if results["xy_max_error"] < 5 else m_t_c_gt
+    # inset_center = m_t_c_pred if results["xy_max_error"] < 5 else m_t_c_gt
 
     # Doesn't work for refactored axes conventions
     # axins = add_circle_inset(axes[2], inset_center, refactored=True)
@@ -122,6 +134,17 @@ def plot_example_single(
         ha="left",
         color="w",
     )
+    
+    if return_plots:
+        # save the fig to a buffer
+        buf = io.BytesIO()
+        plt.savefig(buf, format="png")
+        plt.close(fig)
+        buf.seek(0)
+        plot = Image.open(buf)
+        plots.append(to_tensor(plot))
+
+
     plt.show()
     if out_dir is not None:
         name_ = name.replace("/", "_")
@@ -184,11 +207,23 @@ def plot_example_single(
         dpi=50,
         cmaps="jet",
     )
+
+    if return_plots:
+        # save the fig to a buffer
+        buf = io.BytesIO()
+        plt.savefig(buf, format="png")
+        plt.close(fig)
+        buf.seek(0)
+        plot = Image.open(buf)
+        plots.append(to_tensor(plot))
+
     plt.show()
 
     if out_dir is not None:
         save_plot(p.format("bev"))
         plt.close()
+
+    return plots
 
 
 def plot_example_sequential(
