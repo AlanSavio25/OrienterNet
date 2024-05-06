@@ -87,7 +87,7 @@ def plot_dense_rotations(
     k=3,
     c="k",
     w=None,
-    refactored=False,
+    refactored=True,
     **kwargs
 ):
     t = torch.argmax(prob, -1)

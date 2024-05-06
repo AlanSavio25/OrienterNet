@@ -92,17 +92,18 @@ def plot_example_single(
 
     overlay = likelihood_overlay(prob.numpy(), map_viz.mean(-1, keepdims=True))
 
-    map_viz, overlay, feats_map_rgb = [
-        np.swapaxes(x, 0, 1) for x in (map_viz, overlay, feats_map_rgb)
+    logl = lp_ij.numpy()
+    map_viz, overlay, logl, feats_map_rgb = [
+        np.swapaxes(x, 0, 1) for x in (map_viz, overlay, logl, feats_map_rgb)
     ]
     # aerial_map = np.swapaxes(aerial_map, 0, 1)
     plot_images(
-        [image, map_viz, overlay, feats_map_rgb],
-        # [image, map_viz, aerial_map, overlay, feats_map_rgb],
-        titles=[text1, "osm map", "likelihood", "neural map"],
-        # titles=[text1, "osm map", "aerial_map", "likelihood", "neural map"],
-        origins=["upper", "lower", "lower", "lower"],
-        # origins=["upper", "lower", "lower", "lower", "lower"],
+        [image, map_viz, overlay, logl, feats_map_rgb],
+        # [image, map_viz, aerial_map, overlay, logl, feats_map_rgb],
+        titles=[text1, "osm map", "likelihood", "log-likelihood", "neural map"],
+        # titles=[text1, "osm map", "aerial_map", "likelihood", "log-likelihood", "neural map"],
+        origins=["upper", "lower", "lower", "lower", "lower"],
+        # origins=["upper", "lower", "lower", "lower", "lower", "lower"],
         dpi=75,
         cmaps="jet",
     )
