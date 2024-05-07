@@ -7,8 +7,9 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import rtree
-from PIL import Image
 import tiledwebmaps as twm
+from PIL import Image
+from tqdm import tqdm
 
 from ..utils.geo import BoundaryBox, Projection
 from .data import MapData
@@ -16,7 +17,6 @@ from .download import get_osm
 from .parser import Groups
 from .raster import Canvas, render_raster_map, render_raster_masks
 from .reader import OSMData, OSMNode, OSMWay
-from tqdm import tqdm
 
 
 class MapIndex:
@@ -121,7 +121,10 @@ class TileManager:
 
         tiles = {}
         tileloader = twm.bingmaps(key=bing_token)
-        cached_tileloader = twm.DiskCached(tileloader, "/cluster/project/infk/cvg/students/alpaul/OrienterNet/datasets/cache/")
+        cached_tileloader = twm.DiskCached(
+            tileloader,
+            "/cluster/project/infk/cvg/students/alpaul/OrienterNet/datasets/cache/",
+        )
         for ij, bbox_tile in tqdm(bbox_tiles.items()):
             canvas = Canvas(bbox_tile, ppm)
             nodes, lines, areas = map_index.query(bbox_tile)
@@ -130,11 +133,11 @@ class TileManager:
             width = height = tile_size * ppm
             center = projection.unproject(bbox_tile).center
             canvas.aerial = cached_tileloader.load(
-                latlon=center, # Center of the image
-                bearing=0.0, # Bearing pointing upwards in the image
+                latlon=center,  # Center of the image
+                bearing=0.0,  # Bearing pointing upwards in the image
                 meters_per_pixel=0.5,
                 shape=(width, height),
-                zoom=19, # Zoom level of the fetched tiles
+                zoom=19,  # Zoom level of the fetched tiles
             )
             tiles[ij] = canvas
 
@@ -146,8 +149,7 @@ class TileManager:
         bbox = round_bbox(bbox, self.bbox.min_, self.ppm)
         canvas = Canvas(bbox, self.ppm)
         raster = np.zeros((3, canvas.h, canvas.w), np.uint8)
-        # aerial = np.zeros((3, canvas.h, canvas.w), np.uint8)
-
+        aerial = np.zeros((3, canvas.h, canvas.w), np.uint8)
 
         bbox_all = bbox & self.bbox
         ij_min = np.floor((bbox_all.min_ - self.origin) / self.tile_size).astype(int)
@@ -161,11 +163,11 @@ class TileManager:
                 raster[(slice(None),) + slice_query] = tile.raster[
                     (slice(None),) + slice_tile
                 ]
-                # aerial[(slice(None),) + slice_query] = tile.aerial[
-                #     (slice(None),) + slice_tile
-                # ]
+                aerial[(slice(None),) + slice_query] = tile.aerial[
+                    (slice(None),) + slice_tile
+                ]
         canvas.raster = raster
-        # canvas.aerial = aerial
+        canvas.aerial = aerial
         return canvas
 
     def save(self, path: Path):
@@ -203,9 +205,9 @@ class TileManager:
         for ij, bbox in dump["tiles_bbox"].items():
             tiles[ij] = Canvas(BoundaryBox.from_string(bbox), dump["ppm"])
             raster = np.asarray(Image.open(dump["tiles_raster"][ij]))
-            # aerial = np.asarray(Image.open(dump["tiles_aerial"][ij]))
+            aerial = np.asarray(Image.open(dump["tiles_aerial"][ij]))
             tiles[ij].raster = raster.transpose(2, 0, 1).copy()
-            # tiles[ij].aerial = aerial.transpose(2, 0, 1).copy()
+            tiles[ij].aerial = aerial.transpose(2, 0, 1).copy()
         projection = Projection(*dump["ref_latlonalt"])
         return cls(
             tiles,

@@ -17,7 +17,13 @@ from .base import BaseModel
 from .bev_net import BEVNet
 from .bev_projection import CartesianProjection, PolarProjectionDepth
 from .map_encoder import MapEncoder
-from .metrics import AngleError, AngleRecall, Location2DError, Location2DRecall, ExhaustiveEntropy
+from .metrics import (
+    AngleError,
+    AngleRecall,
+    ExhaustiveEntropy,
+    Location2DError,
+    Location2DRecall,
+)
 from .voting import (
     TemplateSampler,
     argmax_xyr,
@@ -33,7 +39,9 @@ from .voting import (
 class OrienterNet(BaseModel):
     default_conf = {
         "image_encoder": "???",
-        "map_encoder": "???",
+        "map_encoder": None,
+        # "semantic_encoder": "???",
+        "aerial_encoder": None,
         "bev_net": "???",
         "latent_dim": "???",
         "matching_dim": "???",
@@ -75,7 +83,17 @@ class OrienterNet(BaseModel):
 
         Encoder = get_model(conf.image_encoder.get("name", "feature_extractor_v2"))
         self.image_encoder = Encoder(conf.image_encoder.backbone)
-        self.map_encoder = MapEncoder(conf.map_encoder)
+        # TODO: rename map encoder to semantic_encoder,
+        # this would break pretrained model loading though
+        self.map_encoder = self.aerial_encoder = None
+        if conf.map_encoder is not None:
+            self.map_encoder = MapEncoder(conf.map_encoder)  # OSM maps
+        if conf.aerial_encoder is not None:
+            self.aerial_encoder = Encoder(
+                conf.aerial_encoder.backbone
+            )  # Satellite imagery
+        if conf.map_encoder is None and conf.aerial_encoder is None:
+            raise ValueError("At least one map encoder must be created")
         self.bev_net = None if conf.bev_net is None else BEVNet(conf.bev_net)
 
         ppm = conf.pixel_per_meter
@@ -237,12 +255,48 @@ class OrienterNet(BaseModel):
 
     def _forward(self, data):
 
-        # Revert memory layout back to spatial layout
-        spatial_map = torch.rot90(data["map"], 1, dims=(-2, -1))
-
         pred = {}
-        pred_map = pred["map"] = self.map_encoder({**data, "map": spatial_map})
-        f_map = pred_map["map_features"][0]
+
+        # Encode maps
+        feature_maps = []
+        if self.map_encoder is not None:
+            assert "semantic_map" in data
+            semantic_map = torch.rot90(
+                data["semantic_map"], 1, dims=(-2, -1)
+            )  # revert to spatial
+            pred["semantic_map"] = self.map_encoder({**data, "map": semantic_map})
+            feature_maps.append(pred["semantic_map"]["map_features"][0])
+        if self.aerial_encoder is not None:
+            assert "aerial_map" in data, "Aerial map not found in data"
+            aerial_map = torch.rot90(
+                data["aerial_map"], 1, dims=(-2, -1)
+            )  # revert to spatial
+            pred["aerial_map"] = self.aerial_encoder({"image": aerial_map})[
+                "feature_maps"
+            ][0]
+            feature_maps.append(pred["aerial_map"])
+            # feature_maps.append(feature_maps[0])
+
+        # Compute final feature map
+        if len(feature_maps) == 1:
+            f_map = feature_maps[0]
+        elif len(feature_maps) > 1:
+            # max pool feature maps
+            # TODO: apply dropout
+            feature_maps = torch.stack(feature_maps, dim=0)
+            f_map, _ = torch.max(feature_maps, dim=0)
+        else:
+            raise ValueError(f"At least one feature map must be created")
+
+        # revert to memory layout
+        if "semantic_map" in pred:
+            pred["semantic_map"]["map_features"][0] = torch.rot90(
+                pred["semantic_map"]["map_features"][0], -1, dims=(-2, -1)
+            )
+        if "aerial_map" in pred:
+            pred["aerial_map"] = torch.rot90(pred["aerial_map"], -1, dims=(-2, -1))
+        f_map = torch.rot90(f_map, -1, dims=(-2, -1))
+
         batch_size = f_map.shape[0]
 
         # Extract image features.
@@ -278,7 +332,7 @@ class OrienterNet(BaseModel):
                 confidence_bev, -1, dims=(-2, -1)
             )
         valid_bev = torch.rot90(valid_bev, -1, dims=(-2, -1))  # B, I, J
-        f_map = pred["map"]["map_features"][0] = torch.rot90(f_map, -1, dims=(-2, -1))
+
         map_mask = data.get(
             "map_mask", torch.ones((batch_size, *f_map.shape[-2:])).to(valid_bev)
         )
@@ -297,9 +351,9 @@ class OrienterNet(BaseModel):
                 )  # / valid_bev.sum((-1, -2))
             pred["bev"]["output"] = f_bev
 
-        if "log_prior" in pred["map"]:
-            log_prior = pred["map"]["log_prior"][0] = torch.rot90(
-                pred_map["log_prior"][0], -1, dims=(-2, -1)
+        if "semantic_map" in pred and "log_prior" in pred["semantic_map"]:
+            log_prior = pred["semantic_map"]["log_prior"][0] = torch.rot90(
+                pred["semantic_map"]["log_prior"][0], -1, dims=(-2, -1)
             )
 
         if not self.conf.ransac_matcher:  # OrienterNet's Exhaustive Matching
@@ -314,7 +368,11 @@ class OrienterNet(BaseModel):
 
             scores = self.exhaustive_voting(f_bev, f_map, valid_bev, confidence_bev)
             scores = scores.moveaxis(1, -1)  # B,H,W,N
-            if "log_prior" in pred_map and self.conf.apply_map_prior:
+            if (
+                "semantic_map" in pred
+                and "log_prior" in pred["semantic_map"]
+                and self.conf.apply_map_prior
+            ):
                 scores = scores + log_prior.unsqueeze(-1)
             # pred["scores_unmasked"] = scores.clone()
             scores.masked_fill_(~map_mask[..., None], -np.inf)
@@ -397,6 +455,7 @@ class OrienterNet(BaseModel):
             "tile_T_cam_expectation": tile_T_cam_avg,
             "map_T_cam_max": map_T_cam_max,
             "map_T_cam_expectation": map_T_cam_avg,
+            "features_map": f_map,
             "features_image": f_image,
             "features_bev": f_bev,
             "valid_bev": valid_bev.squeeze(1),

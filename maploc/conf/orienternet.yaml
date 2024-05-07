@@ -27,6 +27,12 @@ model:
       decoder: [128, 64, 64]
       padding: replicate
     unary_prior: true
+  aerial_encoder:
+    backbone:
+      encoder: resnet50
+      remove_stride_from_first_conv: true
+      output_dim: ${...matching_dim}
+    # unary_prior: true
   bev_net:
     num_blocks: 4
     latent_dim: ${..latent_dim}
