@@ -74,7 +74,7 @@ class MapillaryDataModule(pl.LightningDataModule):
         OmegaConf.set_struct(default_cfg, True)  # cannot add new keys
         self.cfg = OmegaConf.merge(default_cfg, cfg)
         self.root = Path(self.cfg.data_dir)
-        self.local_dir = self.cfg.local_dir or os.environ.get("TMPDIR")
+        self.local_dir = self.cfg.local_dir  # or os.environ.get("TMPDIR")
         if self.local_dir is not None:
             self.local_dir = Path(self.local_dir, "MGL")
         if self.cfg.crop_size_meters < self.cfg.max_init_error:

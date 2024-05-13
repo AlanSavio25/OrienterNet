@@ -158,7 +158,7 @@ def features_to_RGB(*Fs, masks=None, skip=1):
     from sklearn.decomposition import PCA
 
     def normalize(x):
-        return x / np.linalg.norm(x, axis=-1, keepdims=True)
+        return x / np.linalg.norm(x, axis=-1, keepdims=True).clip(min=1e-5)
 
     if masks is not None:
         assert len(Fs) == len(masks)

@@ -46,6 +46,10 @@ def write_json(path, data):
     with open(path, "w") as f:
         json.dump(data, f, cls=JSONEncoder)
 
+def read_json(path):
+    with open(path, "r") as f:
+        return json.load(f)
+
 
 def download_file(url, path):
     path = Path(path)

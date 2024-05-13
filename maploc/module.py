@@ -4,8 +4,12 @@ from pathlib import Path
 
 import pytorch_lightning as pl
 import torch
+from lightning_fabric.utilities.apply_func import move_data_to_device
+from lightning_utilities.core.apply_func import apply_to_collection
 from omegaconf import DictConfig, OmegaConf, open_dict
 from torchmetrics import MeanMetric, MetricCollection
+
+from maploc.evaluation.viz import plot_example_single
 
 from . import logger
 from .models import get_model
@@ -55,10 +59,31 @@ class GenericModule(pl.LightningModule):
                 prefix="loss/",
                 postfix="/val",
             )
-        self.metrics_val(pred, batch)
+        results = self.metrics_val(pred, batch)
         self.log_dict(self.metrics_val, sync_dist=True)
         self.losses_val.update(losses)
         self.log_dict(self.losses_val, sync_dist=True)
+        if batch_idx == 0 or batch_idx == 20:
+            batch = move_data_to_device(batch, "cpu")
+            batch = apply_to_collection(batch, torch.Tensor, lambda x: x[0])
+            pred = move_data_to_device(pred, "cpu")
+            pred = apply_to_collection(pred, torch.Tensor, lambda x: x[0])
+            results = {k[4:]: results[k] for k in results}
+            plots = plot_example_single(
+                0,
+                None,
+                pred,
+                batch,
+                results,
+                plot_bev=True,
+                out_dir=None,
+                show_gps=True,
+                return_plots=True,
+            )
+            for i, plot in enumerate(plots):
+                self.logger.experiment.add_image(
+                    f"Visualizations/{batch_idx}/{i}", plot, self.global_step
+                )
 
     def validation_epoch_start(self, batch):
         self.losses_val = None

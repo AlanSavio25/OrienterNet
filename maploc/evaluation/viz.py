@@ -1,8 +1,12 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates.
 
+import io
+
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+from PIL import Image
+from torchvision.transforms.functional import to_tensor
 
 from ..osm.viz import Colormap, plot_nodes
 from ..utils.io import write_torch_image
@@ -28,15 +32,15 @@ def plot_example_single(
     show_fused=False,
     show_dir_error=False,
     show_masked_prob=False,
+    return_plots=False,
 ):
 
     # map_T_cam (or m_T_c): Transform of cam in pixel space.
     # map_t_cam (or m_t_c): only translation.
     # m_r_c (yaw): only rotation. East-facing, counter-clockwise rotation
+    plots = []
 
-    scene, name, rasters, map_T_cam_gt = (
-        data[k] for k in ("scene", "name", "map", "map_T_cam")
-    )
+    scene, name, map_T_cam_gt = (data[k] for k in ("scene", "name", "map_T_cam"))
 
     m_t_c_gt = map_T_cam_gt.t.squeeze(0)  # ij_gt
     yaw_gt = map_T_cam_gt.angle.squeeze(0)  # m_r_c_gt
@@ -66,7 +70,7 @@ def plot_example_single(
         lp_ij = lp_ij.clip(min=np.percentile(lp_ij, 1))
     prob = lp_ij.exp()
 
-    feats_map = pred["map"]["map_features"][0]
+    feats_map = pred["features_map"]  # pred["semantic_map"]["map_features"][0]
     (feats_map_rgb,) = features_to_RGB(feats_map.numpy())
 
     text1 = rf'$\Delta xy$: {results["xy_max_error"]:.1f}m'
@@ -81,16 +85,65 @@ def plot_example_single(
     if "xy_gps_error" in results:
         text1 += rf',  $\Delta xy_{{GPS}}$: {results["xy_gps_error"]:.1f}m'
 
-    map_viz = Colormap.apply(rasters)
-    overlay = likelihood_overlay(prob.numpy(), map_viz.mean(-1, keepdims=True))
+    maps_viz = []
+    maps_titles = []
+    if "semantic_map" in pred:
+        rasters = data["semantic_map"]
+        map_viz = Colormap.apply(rasters)
+        maps_titles.append("semantic map")
+        maps_viz.append(map_viz)
+    if "aerial_map" in pred:
+        aerial_map = data["aerial_map"].permute(1, 2, 0) / 255.0
+        maps_titles.append("aerial map")
+        maps_viz.append(aerial_map.numpy())
 
-    map_viz, overlay, feats_map_rgb = [
-        np.swapaxes(x, 0, 1) for x in (map_viz, overlay, feats_map_rgb)
+    overlay = likelihood_overlay(prob.numpy(), maps_viz[0].mean(-1, keepdims=True))
+
+    logl = lp_ij.numpy()
+    overlay, logl, feats_map_rgb = [
+        np.swapaxes(x, 0, 1) for x in (overlay, logl, feats_map_rgb)
     ]
+    for i, mv in enumerate(maps_viz):
+        maps_viz[i] = np.swapaxes(mv, 0, 1)
+
+    # overlay_aerial = aerial_map
+
+    # Create aerial verification plots
+    # map_viz_im = Image.fromarray((map_viz*255.).astype(np.uint8)).convert('RGBA')
+    # aerial_map_im = Image.fromarray((aerial_map*255.).numpy().astype(np.uint8)).convert('RGBA')
+    # overlay_aerial = np.array(Image.blend(map_viz_im, aerial_map_im, alpha=0.5))
+    # torch.set_printoptions(threshold=10_000)
+    # print(f"Lat long gt: {data['latlon_gt'][0].item(), data['latlon_gt'][1].item()}")
+    # plot_images(
+    #     [image, map_viz, aerial_map, overlay_aerial],
+    #     titles=[text1, "osm map", "aerial_map", "overlay"],
+    #     origins=["upper", "lower", "lower", "lower"],
+    #     dpi=75,
+    #     cmaps="jet",
+    # )
+    # fig = plt.gcf()
+    # axes = fig.axes
+    # axes[1].images[0].set_interpolation("none")
+    # axes[2].images[0].set_interpolation("none")
+    # axes[3].images[0].set_interpolation("none")
+    # Colormap.add_colorbar()
+    # plot_nodes(1, rasters[2], refactored=True)
+    # if show_gps and m_t_gps is not None:
+    #     plot_pose(
+    #         [1] + ([2, 3] if show_aerial else []), m_t_gps, c="blue", refactored=True
+    #     )
+    # plot_pose(
+    #     [1] + ([2, 3] if show_aerial else []), m_t_c_gt, yaw_gt, c="red", refactored=True
+    # )
+    # plot_pose(
+    #     [1] + ([2, 3] if show_aerial else []), m_t_c_pred, yaw_p, c="k", refactored=True
+    # )
+    ### DONE
+
     plot_images(
-        [image, map_viz, overlay, feats_map_rgb],
-        titles=[text1, "map", "likelihood", "neural map"],
-        origins=["upper", "lower", "lower", "lower"],
+        [image, *maps_viz, overlay, logl, feats_map_rgb],
+        titles=[text1, *maps_titles, "likelihood", "log-likelihood", "neural map"],
+        origins=["upper", *["lower"] * len(maps_viz), "lower", "lower", "lower"],
         dpi=75,
         cmaps="jet",
     )
@@ -99,14 +152,29 @@ def plot_example_single(
     axes[1].images[0].set_interpolation("none")
     axes[2].images[0].set_interpolation("none")
     Colormap.add_colorbar()
-    plot_nodes(1, rasters[2], refactored=True)
+    if "semantic_map" in pred:
+        plot_nodes(1, rasters[2], refactored=True)
 
     if show_gps and m_t_gps is not None:
-        plot_pose([1], m_t_gps, c="blue", refactored=True)
-    plot_pose([1], m_t_c_gt, yaw_gt, c="red", refactored=True)
-    plot_pose([1], m_t_c_pred, yaw_p, c="k", refactored=True)
-    plot_dense_rotations(2, lp_ijt.exp(), refactored=True)
-    inset_center = m_t_c_pred if results["xy_max_error"] < 5 else m_t_c_gt
+        plot_pose(
+            [1] + ([2] if len(maps_viz) > 1 else []), m_t_gps, c="blue", refactored=True
+        )
+    plot_pose(
+        [1] + ([2] if len(maps_viz) > 1 else []),
+        m_t_c_gt,
+        yaw_gt,
+        c="red",
+        refactored=True,
+    )
+    plot_pose(
+        [1] + ([2] if len(maps_viz) > 1 else []),
+        m_t_c_pred,
+        yaw_p,
+        c="k",
+        refactored=True,
+    )
+    plot_dense_rotations(2 if len(maps_viz) == 1 else 3, lp_ijt.exp(), refactored=True)
+    # inset_center = m_t_c_pred if results["xy_max_error"] < 5 else m_t_c_gt
 
     # Doesn't work for refactored axes conventions
     # axins = add_circle_inset(axes[2], inset_center, refactored=True)
@@ -122,7 +190,47 @@ def plot_example_single(
         ha="left",
         color="w",
     )
+
+    if return_plots:
+        # save the fig to a buffer
+        buf = io.BytesIO()
+        plt.savefig(buf, format="png")
+        plt.close(fig)
+        buf.seek(0)
+        plot = Image.open(buf)
+        plots.append(to_tensor(plot))
+
     plt.show()
+
+    if len(maps_viz) > 1:
+        # TODO: plot a new row containing each map norm
+
+        semantic_feats_map = pred["semantic_map"]["map_features"][0]
+        aerial_feats_map = pred["aerial_map"]
+        (feats_map_rgb_semantic,) = features_to_RGB(semantic_feats_map.numpy())
+        (feats_map_rgb_aerial,) = features_to_RGB(aerial_feats_map.numpy())
+        feats_map_rgb_semantic, feats_map_rgb_aerial = [
+            np.swapaxes(x, 0, 1) for x in (feats_map_rgb_semantic, feats_map_rgb_aerial)
+        ]
+        plot_images(
+            [feats_map_rgb_semantic, feats_map_rgb_aerial],
+            titles=["semantic neural map", "aerial neural map"],
+            origins=["lower", "lower"],
+            dpi=75,
+            cmaps="jet",
+        )
+
+        if return_plots:
+            # save the fig to a buffer
+            buf = io.BytesIO()
+            plt.savefig(buf, format="png")
+            plt.close(fig)
+            buf.seek(0)
+            plot = Image.open(buf)
+            plots.append(to_tensor(plot))
+
+        plt.show()
+
     if out_dir is not None:
         name_ = name.replace("/", "_")
         p = str(out_dir / f"{scene}_{name_}_{{}}.pdf")
@@ -159,8 +267,8 @@ def plot_example_single(
     feats_q = pred["features_bev"]
     mask_bev = pred["valid_bev"]
     prior = None
-    if "log_prior" in pred["map"]:
-        prior = pred["map"]["log_prior"][0].sigmoid()
+    if "semantic_map" in pred and "log_prior" in pred["semantic_map"]:
+        prior = pred["semantic_map"]["log_prior"][0].sigmoid()
     if "bev" in pred and "confidence" in pred["bev"]:
         conf_q = pred["bev"]["confidence"]
     else:
@@ -184,11 +292,23 @@ def plot_example_single(
         dpi=50,
         cmaps="jet",
     )
+
+    if return_plots:
+        # save the fig to a buffer
+        buf = io.BytesIO()
+        plt.savefig(buf, format="png")
+        plt.close(fig)
+        buf.seek(0)
+        plot = Image.open(buf)
+        plots.append(to_tensor(plot))
+
     plt.show()
 
     if out_dir is not None:
         save_plot(p.format("bev"))
         plt.close()
+
+    return plots
 
 
 def plot_example_sequential(

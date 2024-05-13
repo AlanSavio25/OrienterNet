@@ -24,7 +24,7 @@ from ... import logger
 from ...osm.tiling import TileManager
 from ...osm.viz import GeoPlotter
 from ...utils.geo import BoundaryBox, Projection
-from ...utils.io import DATA_URL, download_file, write_json
+from ...utils.io import DATA_URL, download_file, write_json, read_json
 from ..utils import decompose_rotmat
 from .dataset import MapillaryDataModule
 from .download import (
@@ -137,8 +137,8 @@ default_cfg = OmegaConf.create(
         "do_legacy_pano_offset": True,
         "min_dist_between_keyframes": 4,
         "tiling": {
-            "tile_size": 128,
-            "margin": 128,
+            "tile_size": 256,
+            "margin": 256, # Increasing this from 128 to allow querying 512x512 maps at the bordering view locations
             "ppm": 2,
         },
     }
@@ -275,7 +275,8 @@ def process_location(
     location: str,
     data_dir: Path,
     split_path: Path,
-    token: str,
+    mapillary_token: str,
+    bing_token: str,
     cfg: DictConfig,
     generate_tiles: bool = False,
 ):
@@ -293,7 +294,7 @@ def process_location(
     for d in (infos_dir, raw_image_dir, out_image_dir):
         d.mkdir(parents=True, exist_ok=True)
 
-    downloader = MapillaryDownloader(token)
+    downloader = MapillaryDownloader(mapillary_token)
     loop = asyncio.get_event_loop()
 
     logger.info("Fetching metadata for all images.")
@@ -327,6 +328,7 @@ def process_location(
             )
         )
     write_json(loc_dir / "dump.json", dump)
+    # dump = read_json(loc_dir / "dump.json")
 
     # Get the view locations
     view_ids = []
@@ -355,6 +357,7 @@ def process_location(
             projection,
             bbox_tiling,
             cfg.tiling.ppm,
+            bing_token=bing_token,
             tile_size=cfg.tiling.tile_size,
             path=osm_path,
         )
@@ -388,7 +391,8 @@ if __name__ == "__main__":
         "--locations", type=str, nargs="+", default=list(location_to_params)
     )
     parser.add_argument("--split_filename", type=str, default="splits_MGL_13loc.json")
-    parser.add_argument("--token", type=str, required=True)
+    parser.add_argument("--mapillary_token", type=str, required=True)
+    parser.add_argument("--bing_token", type=str, required=True)
     parser.add_argument(
         "--data_dir", type=Path, default=MapillaryDataModule.default_cfg["data_dir"]
     )
@@ -406,7 +410,8 @@ if __name__ == "__main__":
             location,
             args.data_dir,
             args.data_dir / args.split_filename,
-            args.token,
+            args.mapillary_token,
+            args.bing_token,
             cfg_,
             args.generate_tiles,
         )

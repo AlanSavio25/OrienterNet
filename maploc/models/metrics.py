@@ -47,6 +47,19 @@ class AngleRecall(torchmetrics.MeanMetric):
         super().update((error <= self.threshold).float())
 
 
+class ExhaustiveEntropy(torchmetrics.MeanMetric):
+    def __init__(self, key="log_probs", *args, **kwargs):
+        self.key = key
+        super().__init__(*args, **kwargs)
+
+    def update(self, pred, data):
+        log_probs = pred[self.key]
+        probs = log_probs.exp()
+        entropy = -torch.sum(probs * (probs + 1e-9).log())
+        n = torch.prod(torch.tensor(probs.shape)).to(entropy)
+        norm_entropy = entropy / torch.log(n)  # between 0 and 1
+        super().update(norm_entropy.float())
+
 class MeanMetricWithRecall(torchmetrics.Metric):
     full_state_update = True
 
