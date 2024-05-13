@@ -243,7 +243,7 @@ class Transform2D(TensorWrapper):
         assert t.shape[-1] == 2
         assert R.shape[:-2] == t.shape[:-1]
         angle_deg = torch.rad2deg(torch.arctan2(R[..., 1, 0], R[..., 0, 0]))
-        return cls.from_degrees(angle_deg[None], t[..., :2])
+        return cls.from_degrees(angle_deg[..., None], t[..., :2])
 
     @classmethod
     def camera_2d_from_3d(cls, transform: "Transform3D"):
