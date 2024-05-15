@@ -151,8 +151,9 @@ class MapLocDataset(torchdata.Dataset):
         canvas = self.tile_managers[scene].query(bbox_tile)
         raster = canvas.raster  # C, H, W
         raster = torch.from_numpy(np.ascontiguousarray(raster)).long()
-        aerial = canvas.aerial
-        aerial = torch.from_numpy(np.ascontiguousarray(aerial)).long()
+        if hasattr(canvas, 'aerial'):
+            aerial = canvas.aerial
+            aerial = torch.from_numpy(np.ascontiguousarray(aerial)).long()
 
         world_T_cam = Transform3D.from_Rt(world_R_cam, world_t_cam)
         world_T_cam2d = Transform2D.camera_2d_from_3d(world_T_cam)
@@ -177,7 +178,9 @@ class MapLocDataset(torchdata.Dataset):
 
         # Spatial to memory layout
         raster = torch.rot90(raster, -1, dims=(-2, -1))
-        aerial = torch.rot90(aerial, -1, dims=(-2, -1))
+        if hasattr(canvas, 'aerial'):
+            aerial = torch.rot90(aerial, -1, dims=(-2, -1))
+            data['aerial_map'] = aerial
 
         world_t_init = torch.from_numpy(bbox_tile.center)
         tile_t_init = (world_t_init - world_T_tile.t).float()
@@ -218,7 +221,6 @@ class MapLocDataset(torchdata.Dataset):
             "camera": cam,
             "canvas": canvas,
             "semantic_map": raster,
-            "aerial_map": aerial,
             "latlon_gt": self.tile_managers[scene].projection.unproject(world_t_cam),
             "cam_R_gcam": cam_R_gcam,
             "tile_T_cam": tile_T_cam,
