@@ -284,21 +284,21 @@ class OrienterNet(BaseModel):
             # max pool feature maps
             # Apply Dropout. # todo: test this
             # ==
-            dropout_mask = torch.bernoulli(
-                torch.full(len(planes), len(planes[0]), 0.5, device=planes[0].device)
-            )
-            dropout_mask = torch.where(
-                dropout_mask.any(dim=0, keepdim=True),
-                dropout_mask,
-                torch.ones_like(dropout_mask)
-            )
-            features = [
-                p.replace(
-                    valid=torch.where(m.unsqueeze(-1).unsqueeze(-1)), p.valid, torch.zeros_like(p.valid)
-                )
-                for p, m in zip(feature_maps, dropout_mask)
-            ]
-            features = torch.stack(features, dim=-2)
+            # dropout_mask = torch.bernoulli(
+            #     torch.full(len(planes), len(planes[0]), 0.5, device=planes[0].device)
+            # )
+            # dropout_mask = torch.where(
+            #     dropout_mask.any(dim=0, keepdim=True),
+            #     dropout_mask,
+            #     torch.ones_like(dropout_mask)
+            # )
+            # features = [
+            #     p.replace(
+            #         valid=torch.where(m.unsqueeze(-1).unsqueeze(-1)), p.valid, torch.zeros_like(p.valid)
+            #     )
+            #     for p, m in zip(feature_maps, dropout_mask)
+            # ]
+            # features = torch.stack(features, dim=-2)
             # ==
             feature_maps = torch.stack(feature_maps, dim=0)
             f_map, _ = torch.max(feature_maps, dim=0)

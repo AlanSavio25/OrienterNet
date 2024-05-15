@@ -163,11 +163,13 @@ class TileManager:
                 raster[(slice(None),) + slice_query] = tile.raster[
                     (slice(None),) + slice_tile
                 ]
-                aerial[(slice(None),) + slice_query] = tile.aerial[
-                    (slice(None),) + slice_tile
-                ]
+                if hasattr(tile, 'aerial'):
+                    aerial[(slice(None),) + slice_query] = tile.aerial[
+                        (slice(None),) + slice_tile
+                    ]
         canvas.raster = raster
-        canvas.aerial = aerial
+        if hasattr(self.tiles[0,0], 'aerial'):
+            canvas.aerial = aerial
         return canvas
 
     def save(self, path: Path):
@@ -205,9 +207,10 @@ class TileManager:
         for ij, bbox in dump["tiles_bbox"].items():
             tiles[ij] = Canvas(BoundaryBox.from_string(bbox), dump["ppm"])
             raster = np.asarray(Image.open(dump["tiles_raster"][ij]))
-            aerial = np.asarray(Image.open(dump["tiles_aerial"][ij]))
             tiles[ij].raster = raster.transpose(2, 0, 1).copy()
-            tiles[ij].aerial = aerial.transpose(2, 0, 1).copy()
+            if 'tiles_aerial' in dump:
+                aerial = np.asarray(Image.open(dump["tiles_aerial"][ij]))
+                tiles[ij].aerial = aerial.transpose(2, 0, 1).copy()
         projection = Projection(*dump["ref_latlonalt"])
         return cls(
             tiles,
