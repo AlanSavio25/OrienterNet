@@ -11,20 +11,21 @@ from typing import List
 import cv2
 import numpy as np
 from omegaconf import DictConfig, OmegaConf
+from tqdm import tqdm
+from tqdm.contrib.concurrent import thread_map
+
 from opensfm.pygeometry import Camera
 from opensfm.pymap import Shot
 from opensfm.undistort import (
     perspective_camera_from_fisheye,
     perspective_camera_from_perspective,
 )
-from tqdm import tqdm
-from tqdm.contrib.concurrent import thread_map
 
 from ... import logger
 from ...osm.tiling import TileManager
 from ...osm.viz import GeoPlotter
 from ...utils.geo import BoundaryBox, Projection
-from ...utils.io import DATA_URL, download_file, write_json, read_json
+from ...utils.io import DATA_URL, download_file, read_json, write_json
 from ..utils import decompose_rotmat
 from .dataset import MapillaryDataModule
 from .download import (
@@ -138,7 +139,7 @@ default_cfg = OmegaConf.create(
         "min_dist_between_keyframes": 4,
         "tiling": {
             "tile_size": 256,
-            "margin": 256, # Increasing this from 128 to allow querying 512x512 maps at the bordering view locations
+            "margin": 256,  # Increasing this from 128 to allow querying 512x512 maps at the bordering view locations
             "ppm": 2,
         },
     }
