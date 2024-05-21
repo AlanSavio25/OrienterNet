@@ -2,6 +2,7 @@ from typing import Tuple
 
 import torch
 
+from maploc.utils.grids import interpolate_nd
 from maploc.utils.wrappers import Transform2D
 
 
@@ -87,43 +88,6 @@ def kabsch_2d(
     i_pts_aligned = (i_r_j @ i_pts.T).T + i_t_j
     rssd = torch.sqrt(((i_pts_aligned - j_pts) ** 2).sum())
     return i_r_j, i_t_j, valid, rssd
-
-
-def interpolate_nd(
-    array: torch.Tensor,  # H, W, 1
-    points: torch.Tensor,  # N D
-    valid_array: torch.Tensor,
-    padding_mode: str = "zeros",
-    mode: str = "bilinear",
-) -> Tuple[torch.Tensor, torch.Tensor]:
-    """Interpolate an N-dimensional array at the given points."""
-
-    size = torch.tensor(array.shape[-2:]).to(points)  # H, W
-    valid_bounds = torch.all((points >= 0) & (points < size), -1)
-    grid_pts = points.flip(-1)
-    grid_pts = (grid_pts * 2) / (size - 1) - 1.0
-    values = torch.nn.functional.grid_sample(
-        array[None, ...],
-        grid_pts[None, None, ...],
-        mode,
-        padding_mode,
-        align_corners=True,
-    )
-
-    if valid_array is not None:
-        # Excludes bev points that fall in invalid map regions from pose scoring
-        nan_mask = torch.where(valid_array, 0, torch.nan)
-        nan_points_mask = torch.nn.functional.grid_sample(
-            nan_mask[None, None, ...],
-            grid_pts[None, None, ...],
-            mode,
-            padding_mode,
-            align_corners=True,
-        )
-        # valid = valid & ~torch.isnan(nan_points_mask)
-        valid_mask = ~torch.isnan(nan_points_mask)
-
-    return values.squeeze(), valid_bounds.squeeze(), valid_mask.squeeze()
 
 
 def interpolate_score_maps(
