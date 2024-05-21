@@ -45,7 +45,7 @@ class MapLocDataset(torchdata.Dataset):
         "resize_image": None,
         "pad_to_square": False,  # legacy
         "pad_to_multiple": 32,
-        "rectify_pitch": True,
+        "rectify_image": True,  # set to False when BEV inference is inverse.
         "augmentation": {
             "rot90": False,
             "flip": False,
@@ -151,7 +151,7 @@ class MapLocDataset(torchdata.Dataset):
         canvas = self.tile_managers[scene].query(bbox_tile)
         raster = canvas.raster  # C, H, W
         raster = torch.from_numpy(np.ascontiguousarray(raster)).long()
-        if hasattr(canvas, 'aerial'):
+        if hasattr(canvas, "aerial"):
             aerial = canvas.aerial
             aerial = torch.from_numpy(np.ascontiguousarray(aerial)).long()
 
@@ -174,13 +174,18 @@ class MapLocDataset(torchdata.Dataset):
         map_T_cam = Transform2D.to_pixels(tile_T_cam, 1 / canvas.ppm)
         # map_T_cam will be deprecated, tile_T_cam is sufficient.
 
-        image, valid, cam = self.process_image(image, cam, seed, cam_R_gcam)
+        # We can avoid rectification when using SNAP's inverse BEV prediction
+        image, valid, cam = self.process_image(
+            image, cam, seed, cam_R_gcam, rectify=self.cfg.rectify_image
+        )
+        if self.cfg.rectify_image:
+            cam_R_gcam = torch.eye(3)
 
         # Spatial to memory layout
         raster = torch.rot90(raster, -1, dims=(-2, -1))
-        if hasattr(canvas, 'aerial'):
+        if hasattr(canvas, "aerial"):
             aerial = torch.rot90(aerial, -1, dims=(-2, -1))
-            data['aerial_map'] = aerial
+            data["aerial_map"] = aerial
 
         world_t_init = torch.from_numpy(bbox_tile.center)
         tile_t_init = (world_t_init - world_T_tile.t).float()
@@ -226,13 +231,20 @@ class MapLocDataset(torchdata.Dataset):
             "tile_T_cam": tile_T_cam,
             "map_T_cam": map_T_cam,
             "map_t_init": map_t_init,
+            "world_T_cam": world_T_cam.t,  # TODO: delete this
             "pixels_per_meter": torch.tensor(canvas.ppm).float(),
         }
 
-    def process_image(self, image, cam, seed, cam_R_gcam):
+    def process_image(self, image, cam, seed, cam_R_gcam, rectify=True):
 
-        assert self.cfg.rectify_pitch
-        image, valid = rectify_image(image, cam, cam_R_gcam)
+        if rectify:
+            image, valid = rectify_image(image, cam, cam_R_gcam)
+        else:
+            valid = torch.ones(
+                image.shape[:-3] + image.shape[-2:],
+                dtype=torch.bool,
+                device=image.device,
+            )
 
         if self.cfg.target_focal_length is not None:
             # resize to a canonical focal length
