@@ -7,10 +7,7 @@ model:
   name: orienternet
   latent_dim: 128
   matching_dim: 8
-  z_max: 32
-  x_max: 32
   pixel_per_meter: ${data.pixel_per_meter}
-  num_scale_bins: 33
   num_rotations: 64
   image_encoder:
     backbone:
@@ -27,15 +24,46 @@ model:
       decoder: [128, 64, 64]
       padding: replicate
     unary_prior: true
-  aerial_encoder:
-    backbone:
-      encoder: resnet50
-      remove_stride_from_first_conv: true
-      output_dim: ${...matching_dim}
-    # unary_prior: true
-  bev_net:
-    num_blocks: 4
+  # aerial_encoder:
+  #   backbone:
+  #     encoder: resnet50
+  #     remove_stride_from_first_conv: true
+  #     output_dim: ${...matching_dim}
+  #   # unary_prior: true
+  bev_mapper:
+    image_encoder:
+      backbone:
+        encoder: resnet101
+    scale_classifier: mlp # linear # mlp for snap
+    scale_mlp:
+      activation: ReLU
+      layers:
+        - ${...num_scale_bins}
+      apply_input_activation: true
+      input_dim: ${...latent_dim}
+    fusion_mlp: # fuses feature with depth score
+      activation: ReLU
+      layers:
+        - ${eval:'${...latent_dim}*2'}
+        - ${...latent_dim}
+      apply_input_activation: false
+      input_dim: ${eval:'${...latent_dim} + 1'}
+    mode: inverse # inverse # inverse for SNAP-like BEV
+    z_min: 1.0
+    z_max: 32.0 # depth
+    x_max: 32.0
+    grid_height: 12
+    grid_cell_size: 1 # this is the same as 1/ppm # todo: fix redundancy
+    grid_z_offset_range: [-1.0, 1.0]
+    pixel_per_meter: ${data.pixel_per_meter}
+    num_scale_bins: 33
+    num_rotations: ${..num_rotations}
     latent_dim: ${..latent_dim}
-    output_dim: ${..matching_dim}
-    confidence: true
+    feature_depth_fusion: softmax # mlp
+    vertical_pooling: max # max, mean, sum
+    bev_net:
+      num_blocks: 4
+      latent_dim: ${...latent_dim}
+      output_dim: ${...matching_dim}
+      confidence: true
   ransac_matcher: false
