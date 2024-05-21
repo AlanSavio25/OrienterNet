@@ -104,6 +104,7 @@ def prepare_experiment_dir(experiment_dir, cfg, rank):
 
 def train(cfg: DictConfig, job_id: Optional[int] = None):
     torch.set_float32_matmul_precision("medium")
+    OmegaConf.register_new_resolver("eval", eval)
     OmegaConf.resolve(cfg)
     rank = rank_zero_only.rank
 
@@ -148,7 +149,7 @@ def train(cfg: DictConfig, job_id: Optional[int] = None):
     )
     checkpointing_step.CHECKPOINT_NAME_LAST = "last-step"
 
-    strategy = 'auto'
+    strategy = "auto"
     if cfg.experiment.gpus > 1:
         strategy = pl.strategies.DDPStrategy(find_unused_parameters=False)
         for split in ["train", "val"]:
