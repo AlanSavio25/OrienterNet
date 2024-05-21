@@ -48,9 +48,9 @@ model:
         - ${...latent_dim}
       apply_input_activation: false
       input_dim: ${eval:'${...latent_dim} + 1'}
-    mode: inverse # inverse # inverse for SNAP-like BEV
+    mode: forward # inverse # inverse for SNAP-like BEV
     z_min: 1.0
-    z_max: 32.0 # depth
+    z_max: 32 # depth
     x_max: 32.0
     grid_height: 12
     grid_cell_size: 1 # this is the same as 1/ppm # todo: fix redundancy
@@ -66,4 +66,6 @@ model:
       latent_dim: ${...latent_dim}
       output_dim: ${...matching_dim}
       confidence: true
+    profiler_mode: true
+    overall_profiler: false
   ransac_matcher: false

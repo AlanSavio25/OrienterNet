@@ -74,6 +74,7 @@ class TemplateSampler(torch.nn.Module):
 
 
 def conv2d_fft_batchwise(signal, kernel, padding="same", padding_mode="constant"):
+    signal_shape = signal.shape
     if padding == "same":
         padding = [i // 2 for i in kernel.shape[-2:]]
     padding_signal = [p for p in padding[::-1] for _ in range(2)]
@@ -85,7 +86,8 @@ def conv2d_fft_batchwise(signal, kernel, padding="same", padding_mode="constant"
     ]
     kernel_padded = pad(kernel, padding_kernel)
 
-    # print(f"padding: {signal.shape[-1] - kernel.shape[-1]}")
+    print(f"signal, kernel, signal_padded, kernel_padded shapes: {signal_shape[-1], kernel.shape[-1], signal.shape[-1], kernel_padded.shape[-1]}")
+    print(f"padding: {signal.shape[-1] - kernel.shape[-1]}")
     signal_fr = rfftn(signal, dim=(-1, -2))
     kernel_fr = rfftn(kernel_padded, dim=(-1, -2))
 

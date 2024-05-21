@@ -1,5 +1,6 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates.
 
+from torch.profiler import ProfilerActivity, profile, record_function
 import numpy as np
 import torch
 from torch.nn.functional import normalize
@@ -101,12 +102,36 @@ class OrienterNet(BaseModel):
             f_bev = f_bev * confidence_bev.unsqueeze(1)
         f_bev = f_bev.masked_fill(~valid_bev.unsqueeze(1), 0.0)
         templates = self.bev_mapper.template_sampler(f_bev)
-        with torch.autocast("cuda", enabled=False):
-            scores = conv2d_fft_batchwise(
-                f_map.float(),
-                templates.float(),
-                padding_mode=self.conf.padding_matching,
+
+        if self.conf.bev_mapper.profiler_mode:
+            torch.cuda.reset_peak_memory_stats()
+            with profile(
+                activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+                profile_memory=True,
+            ) as prof:
+                with record_function("exhaustive_matching"):
+                    with torch.autocast("cuda", enabled=False):
+                        scores = conv2d_fft_batchwise(
+                            f_map.float(),
+                            templates.float(),
+                            padding_mode=self.conf.padding_matching,
+                        )
+            cuda_time = prof.key_averages()[0].cuda_time / 1000
+            stats = torch.cuda.memory_stats()
+            peak_bytes = stats["allocated_bytes.all.peak"] / 1024**3
+            print(
+                f"[exhaustive_matching]: {cuda_time:.3f} ms, {peak_bytes:.2f} GB"
             )
+            print()
+        else:
+            with torch.autocast("cuda", enabled=False):
+                scores = conv2d_fft_batchwise(
+                    f_map.float(),
+                    templates.float(),
+                    padding_mode=self.conf.padding_matching,
+                )
+
+        
         if self.conf.add_temperature:
             scores = scores * torch.exp(self.temperature)
 
@@ -265,7 +290,26 @@ class OrienterNet(BaseModel):
             self.bev_mapper.bev_ij_pts = build_query_grid().to(f_map)
 
         # Predict BEV from image
-        bev_mapper_pred = self.bev_mapper(data)
+        
+        if self.conf.bev_mapper.overall_profiler:
+            torch.cuda.reset_peak_memory_stats()
+            with profile(
+                activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+                profile_memory=True,
+            ) as prof:
+                with record_function("overall_bev_mapper"):
+                    bev_mapper_pred = self.bev_mapper(data)
+            cuda_time = prof.key_averages()[0].cuda_time / 1000
+            stats = torch.cuda.memory_stats()
+            peak_bytes = stats["allocated_bytes.all.peak"] / 1024**3
+            print(
+                f"[overall_bev_mapper]: {cuda_time:.3f} ms, {peak_bytes:.2f} GB"
+            )
+            print()
+
+        else:
+            bev_mapper_pred = self.bev_mapper(data)
+
         pred.update({**bev_mapper_pred})
 
         f_bev, valid_bev, confidence_bev = [
