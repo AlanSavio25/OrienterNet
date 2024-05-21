@@ -85,6 +85,7 @@ def conv2d_fft_batchwise(signal, kernel, padding="same", padding_mode="constant"
     ]
     kernel_padded = pad(kernel, padding_kernel)
 
+    # print(f"padding: {signal.shape[-1] - kernel.shape[-1]}")
     signal_fr = rfftn(signal, dim=(-1, -2))
     kernel_fr = rfftn(kernel_padded, dim=(-1, -2))
 

@@ -1,6 +1,5 @@
-import numpy as np
 import torch
-from typing import Optional, Tuple, TypeVar, Type
+from typing import Tuple
 from dataclasses import dataclass
 
 @dataclass
@@ -81,7 +80,6 @@ def interpolate_nd(
     valid_bounds = torch.all((points >= 0) & (points < size), -1).squeeze()
     grid_pts = (points * 2) / (size - 1).clamp(min=1) - 1.0
     grid_pts = grid_pts.flip(-1) # grid_sample assumes xy indexing.
-    # torch where size == 0, grid_pts -1
     values = torch.nn.functional.grid_sample(
         array[None, ...],
         grid_pts[None, None, ...],
