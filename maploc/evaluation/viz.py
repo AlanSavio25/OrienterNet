@@ -192,6 +192,9 @@ def plot_example_single(
     )
 
     if return_plots:
+        import matplotlib
+
+        matplotlib.use("Agg")
         # save the fig to a buffer
         buf = io.BytesIO()
         plt.savefig(buf, format="png")
@@ -200,7 +203,8 @@ def plot_example_single(
         plot = Image.open(buf)
         plots.append(to_tensor(plot))
 
-    plt.show()
+    else:
+        plt.show()
 
     if len(maps_viz) > 1:
         # TODO: plot a new row containing each map norm
@@ -229,7 +233,8 @@ def plot_example_single(
             plot = Image.open(buf)
             plots.append(to_tensor(plot))
 
-        plt.show()
+        else:
+            plt.show()
 
     if out_dir is not None:
         name_ = name.replace("/", "_")
@@ -264,6 +269,19 @@ def plot_example_single(
     if not plot_bev:
         return
 
+    depth_scores = torch.nn.Softmax(-1)(pred["pixel_scales"]).numpy()  # H, W, C=33
+
+    depth_indices = np.arange(depth_scores.shape[-1])
+
+    # normalized_depth = np.sum(depth_scores * depth_indices, axis=-1)[..., np.newaxis]
+
+    expected_depth = np.sum(depth_scores * depth_indices, axis=-1)
+    # normalized_depth = (expected_depth - np.min(expected_depth)) / (np.max(expected_depth) - np.min(expected_depth))
+
+    explogdepth = (expected_depth).astype(np.uint8)
+
+    logsumexp = torch.log(torch.sum(torch.exp(pred["pixel_scales"]), -1))
+
     feats_q = pred["features_bev"]
     mask_bev = pred["valid_bev"]
     prior = None
@@ -283,10 +301,19 @@ def plot_example_single(
     ]
     if prior is not None:
         prior = np.swapaxes(prior, 0, 1)
-    origins = ["lower", "lower", "lower"] + ([] if prior is None else ["lower"])
+    origins = ["upper", "upper", "lower", "lower", "lower"] + (
+        [] if prior is None else ["lower"]
+    )
     plot_images(
-        [conf_q, feats_q_rgb, norm_map] + ([] if prior is None else [prior]),
-        titles=["BEV confidence", "BEV features", "map norm"]
+        [explogdepth, logsumexp, conf_q, feats_q_rgb, norm_map]
+        + ([] if prior is None else [prior]),
+        titles=[
+            "Expected log-depth",
+            "confidence",
+            "BEV confidence",
+            "BEV features",
+            "map norm",
+        ]
         + ([] if prior is None else ["map prior"]),
         origins=origins,
         dpi=50,
@@ -302,7 +329,8 @@ def plot_example_single(
         plot = Image.open(buf)
         plots.append(to_tensor(plot))
 
-    plt.show()
+    else:
+        plt.show()
 
     if out_dir is not None:
         save_plot(p.format("bev"))
