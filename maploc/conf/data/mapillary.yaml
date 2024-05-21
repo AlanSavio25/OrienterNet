@@ -1,24 +1,24 @@
 name: mapillary
 scenes:
-  - sanfrancisco_soma
-  - sanfrancisco_hayes
+  # - sanfrancisco_soma
+  # - sanfrancisco_hayes
   - amsterdam
-  - berlin
-  - lemans
-  - montrouge
-  - toulouse
-  - nantes
-  - vilnius
-  - avignon
-  - helsinki
-  - milan
-  - paris
+  # - berlin
+  # - lemans
+  # - montrouge
+  # - toulouse
+  # - nantes
+  # - vilnius
+  # - avignon
+  # - helsinki
+  # - milan
+  # - paris
 return_gps: true
 split: splits_MGL_13loc.json
 loading:
   train:
-    batch_size: 4 # 12
-    num_workers: 4 # ${.batch_size}
+    batch_size: 1 # 12
+    num_workers: 1 # ${.batch_size}
   val:
     batch_size: 1 # ${..train.batch_size}
     num_workers: 1 # ${.batch_size}
@@ -34,7 +34,7 @@ add_map_mask: false # true
 # preprocessing
 resize_image: 512
 pad_to_square: true
-rectify_pitch: true
+rectify_image: false # set to false if using SNAP's BEV prediction
 augmentation:
   rot90: true
   flip: true
