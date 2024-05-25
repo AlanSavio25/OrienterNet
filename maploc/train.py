@@ -68,7 +68,9 @@ class ConsoleLogger(pl.callbacks.Callback):
 
 def find_last_checkpoint_path(experiment_dir):
     cls = pl.callbacks.ModelCheckpoint
-    path = osp.join(experiment_dir, cls.CHECKPOINT_NAME_LAST + cls.FILE_EXTENSION)
+    # last_checkpoint_name = cls.CHECKPOINT_NAME_LAST
+    last_checkpoint_name = "last-step"
+    path = osp.join(experiment_dir, last_checkpoint_name + cls.FILE_EXTENSION)
     if osp.exists(path):
         return path
     else:
