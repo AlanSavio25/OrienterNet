@@ -34,7 +34,7 @@ model:
     image_encoder:
       backbone:
         encoder: resnet101
-    scale_classifier: mlp # linear # mlp for snap
+    scale_classifier: mlp
     scale_mlp:
       activation: ReLU
       layers:
@@ -50,16 +50,16 @@ model:
       input_dim: ${eval:'${...latent_dim} + 1'}
     mode: inverse # inverse # inverse for SNAP-like BEV
     z_min: 1.0
-    z_max: 32.0 # depth
-    x_max: 32.0
+    z_max: # 32.0 # depth
+    x_max: # 32.0
     grid_height: 12
-    grid_cell_size: 1 # this is the same as 1/ppm # todo: fix redundancy
-    grid_z_offset_range: [-1.0, 1.0]
+    grid_cell_size: ${eval:'1/${..pixel_per_meter}'} # 0.5
+    grid_z_offset_range: [-1.5, 1.5]
     pixel_per_meter: ${data.pixel_per_meter}
     num_scale_bins: 33
     num_rotations: ${..num_rotations}
     latent_dim: ${..latent_dim}
-    feature_depth_fusion: softmax # mlp
+    feature_depth_fusion: mlp
     vertical_pooling: max # max, mean, sum
     bev_net:
       num_blocks: 4
