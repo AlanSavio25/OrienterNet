@@ -6,7 +6,7 @@ import json
 import shutil
 from collections import defaultdict
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 import cv2
 import numpy as np
@@ -140,7 +140,7 @@ default_cfg = OmegaConf.create(
         "tiling": {
             "tile_size": 256,
             "margin": 256,  # Increasing this from 128 to allow querying 512x512 maps at the bordering view locations
-            "ppm": 2,
+            "ppm": 0.5,
         },
     }
 )
@@ -277,7 +277,7 @@ def process_location(
     data_dir: Path,
     split_path: Path,
     mapillary_token: str,
-    bing_token: str,
+    bing_token: Optional[str],
     cfg: DictConfig,
     generate_tiles: bool = False,
 ):
@@ -295,41 +295,41 @@ def process_location(
     for d in (infos_dir, raw_image_dir, out_image_dir):
         d.mkdir(parents=True, exist_ok=True)
 
-    downloader = MapillaryDownloader(mapillary_token)
-    loop = asyncio.get_event_loop()
+    # downloader = MapillaryDownloader(mapillary_token)
+    # loop = asyncio.get_event_loop()
 
-    logger.info("Fetching metadata for all images.")
-    image_infos, num_fail = loop.run_until_complete(
-        fetch_image_infos(image_ids, downloader, infos_dir)
-    )
-    logger.info("%d failures (%.1f%%).", num_fail, 100 * num_fail / len(image_ids))
+    # logger.info("Fetching metadata for all images.")
+    # image_infos, num_fail = loop.run_until_complete(
+    #     fetch_image_infos(image_ids, downloader, infos_dir)
+    # )
+    # logger.info("%d failures (%.1f%%).", num_fail, 100 * num_fail / len(image_ids))
 
-    logger.info("Fetching image pixels.")
-    image_urls = [(i, info["thumb_2048_url"]) for i, info in image_infos.items()]
-    num_fail = loop.run_until_complete(
-        fetch_images_pixels(image_urls, downloader, raw_image_dir)
-    )
-    logger.info("%d failures (%.1f%%).", num_fail, 100 * num_fail / len(image_urls))
+    # logger.info("Fetching image pixels.")
+    # image_urls = [(i, info["thumb_2048_url"]) for i, info in image_infos.items()]
+    # num_fail = loop.run_until_complete(
+    #     fetch_images_pixels(image_urls, downloader, raw_image_dir)
+    # )
+    # logger.info("%d failures (%.1f%%).", num_fail, 100 * num_fail / len(image_urls))
 
-    seq_to_image_ids = defaultdict(list)
-    for i, info in image_infos.items():
-        seq_to_image_ids[info["sequence"]].append(i)
-    seq_to_image_ids = dict(seq_to_image_ids)
+    # seq_to_image_ids = defaultdict(list)
+    # for i, info in image_infos.items():
+    #     seq_to_image_ids[info["sequence"]].append(i)
+    # seq_to_image_ids = dict(seq_to_image_ids)
 
-    dump = {}
-    for seq_image_ids in tqdm(seq_to_image_ids.values()):
-        dump.update(
-            process_sequence(
-                seq_image_ids,
-                image_infos,
-                projection,
-                cfg,
-                raw_image_dir,
-                out_image_dir,
-            )
-        )
-    write_json(loc_dir / "dump.json", dump)
-    # dump = read_json(loc_dir / "dump.json")
+    # dump = {}
+    # for seq_image_ids in tqdm(seq_to_image_ids.values()):
+    #     dump.update(
+    #         process_sequence(
+    #             seq_image_ids,
+    #             image_infos,
+    #             projection,
+    #             cfg,
+    #             raw_image_dir,
+    #             out_image_dir,
+    #         )
+    #     )
+    # write_json(loc_dir / "dump.json", dump)
+    dump = read_json(loc_dir / "dump.json")
 
     # Get the view locations
     view_ids = []
@@ -393,7 +393,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--split_filename", type=str, default="splits_MGL_13loc.json")
     parser.add_argument("--mapillary_token", type=str, required=True)
-    parser.add_argument("--bing_token", type=str, required=True)
+    parser.add_argument("--bing_token", type=str, default=None)
     parser.add_argument(
         "--data_dir", type=Path, default=MapillaryDataModule.default_cfg["data_dir"]
     )
