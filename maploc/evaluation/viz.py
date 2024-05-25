@@ -152,8 +152,8 @@ def plot_example_single(
     axes[1].images[0].set_interpolation("none")
     axes[2].images[0].set_interpolation("none")
     Colormap.add_colorbar()
-    if "semantic_map" in pred:
-        plot_nodes(1, rasters[2], refactored=True)
+    # if "semantic_map" in pred:
+    #     plot_nodes(1, rasters[2], refactored=True)
 
     if show_gps and m_t_gps is not None:
         plot_pose(
@@ -269,18 +269,13 @@ def plot_example_single(
     if not plot_bev:
         return
 
-    depth_scores = torch.nn.Softmax(-1)(pred["pixel_scales"]).numpy()  # H, W, C=33
+    scales_scores = pred["pixel_scales"]
 
-    depth_indices = np.arange(depth_scores.shape[-1])
-
-    # normalized_depth = np.sum(depth_scores * depth_indices, axis=-1)[..., np.newaxis]
-
-    expected_depth = np.sum(depth_scores * depth_indices, axis=-1)
-    # normalized_depth = (expected_depth - np.min(expected_depth)) / (np.max(expected_depth) - np.min(expected_depth))
-
-    explogdepth = (expected_depth).astype(np.uint8)
-
-    logsumexp = torch.log(torch.sum(torch.exp(pred["pixel_scales"]), -1))
+    log_prob = torch.nn.functional.log_softmax(scales_scores, dim=-1)
+    max_scoring_scale = log_prob.max(-1).indices  # scale with highest score
+    scales_exp = torch.sum(log_prob.exp() * torch.arange(scales_scores.shape[-1]), -1)
+    max_score = log_prob.max(-1).values.exp()
+    total_score = torch.logsumexp(scales_scores, -1)
 
     feats_q = pred["features_bev"]
     mask_bev = pred["valid_bev"]
@@ -301,15 +296,10 @@ def plot_example_single(
     ]
     if prior is not None:
         prior = np.swapaxes(prior, 0, 1)
-    origins = ["upper", "upper", "lower", "lower", "lower"] + (
-        [] if prior is None else ["lower"]
-    )
+    origins = ["lower", "lower", "lower"] + ([] if prior is None else ["lower"])
     plot_images(
-        [explogdepth, logsumexp, conf_q, feats_q_rgb, norm_map]
-        + ([] if prior is None else [prior]),
+        [conf_q, feats_q_rgb, norm_map] + ([] if prior is None else [prior]),
         titles=[
-            "Expected log-depth",
-            "confidence",
             "BEV confidence",
             "BEV features",
             "map norm",
@@ -328,7 +318,31 @@ def plot_example_single(
         buf.seek(0)
         plot = Image.open(buf)
         plots.append(to_tensor(plot))
+    else:
+        plt.show()
 
+    origins = ["upper", "upper", "upper", "upper"]
+    plot_images(
+        [max_scoring_scale, scales_exp, max_score, total_score],
+        titles=[
+            "Max scoring scale",
+            "Expected scale",
+            "Max Score",
+            "Total score",
+        ],
+        origins=origins,
+        dpi=50,
+        cmaps="jet",
+    )
+
+    if return_plots:
+        # save the fig to a buffer
+        buf = io.BytesIO()
+        plt.savefig(buf, format="png")
+        plt.close(fig)
+        buf.seek(0)
+        plot = Image.open(buf)
+        plots.append(to_tensor(plot))
     else:
         plt.show()
 
