@@ -31,6 +31,7 @@ pixel_per_meter: 2
 crop_size_meters: 64
 max_init_error: 48
 add_map_mask: false # true
+tiles_filename: tiles.pkl
 # preprocessing
 resize_image: 512
 pad_to_square: true
