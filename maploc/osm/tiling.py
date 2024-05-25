@@ -120,11 +120,12 @@ class TileManager:
                 )
 
         tiles = {}
-        tileloader = twm.bingmaps(key=bing_token)
-        cached_tileloader = twm.DiskCached(
-            tileloader,
-            "/cluster/project/infk/cvg/students/alpaul/OrienterNet/datasets/cache/",
-        )
+        if bing_token is not None:
+            tileloader = twm.bingmaps(key=bing_token)
+            cached_tileloader = twm.DiskCached(
+                tileloader,
+                "/cluster/project/infk/cvg/students/alpaul/OrienterNet/datasets/cache/",
+            )
         for ij, bbox_tile in tqdm(bbox_tiles.items()):
             canvas = Canvas(bbox_tile, ppm)
             nodes, lines, areas = map_index.query(bbox_tile)
@@ -132,13 +133,14 @@ class TileManager:
             canvas.raster = render_raster_map(masks)
             width = height = tile_size * ppm
             center = projection.unproject(bbox_tile).center
-            canvas.aerial = cached_tileloader.load(
-                latlon=center,  # Center of the image
-                bearing=0.0,  # Bearing pointing upwards in the image
-                meters_per_pixel=0.5,
-                shape=(width, height),
-                zoom=19,  # Zoom level of the fetched tiles
-            )
+            if bing_token is not None:
+                canvas.aerial = cached_tileloader.load(
+                    latlon=center,  # Center of the image
+                    bearing=0.0,  # Bearing pointing upwards in the image
+                    meters_per_pixel=0.5,
+                    shape=(width, height),
+                    zoom=19,  # Zoom level of the fetched tiles
+                )
             tiles[ij] = canvas
 
         groups = {k: v for k, v in vars(Groups).items() if not k.startswith("__")}
@@ -163,12 +165,12 @@ class TileManager:
                 raster[(slice(None),) + slice_query] = tile.raster[
                     (slice(None),) + slice_tile
                 ]
-                if hasattr(tile, 'aerial'):
+                if hasattr(tile, "aerial"):
                     aerial[(slice(None),) + slice_query] = tile.aerial[
                         (slice(None),) + slice_tile
                     ]
         canvas.raster = raster
-        if hasattr(self.tiles[0,0], 'aerial'):
+        if hasattr(self.tiles[0, 0], "aerial"):
             canvas.aerial = aerial
         return canvas
 
@@ -180,7 +182,6 @@ class TileManager:
             "groups": self.groups,
             "tiles_bbox": {},
             "tiles_raster": {},
-            "tiles_aerial": {},
         }
         if self.projection is not None:
             dump["ref_latlonalt"] = self.projection.latlonalt
@@ -191,10 +192,11 @@ class TileManager:
             raster.save(raster_bytes, format="PNG")
             dump["tiles_raster"][ij] = raster_bytes
 
-            aerial_bytes = io.BytesIO()
-            aerial = Image.fromarray(canvas.aerial.astype(np.uint8))
-            aerial.save(aerial_bytes, format="PNG")
-            dump["tiles_aerial"][ij] = aerial_bytes
+            if hasattr(canvas, "aerial"):
+                aerial_bytes = io.BytesIO()
+                aerial = Image.fromarray(canvas.aerial.astype(np.uint8))
+                aerial.save(aerial_bytes, format="PNG")
+                dump["tiles_aerial"][ij] = aerial_bytes
 
         with open(path, "wb") as fp:
             pickle.dump(dump, fp)
@@ -208,7 +210,7 @@ class TileManager:
             tiles[ij] = Canvas(BoundaryBox.from_string(bbox), dump["ppm"])
             raster = np.asarray(Image.open(dump["tiles_raster"][ij]))
             tiles[ij].raster = raster.transpose(2, 0, 1).copy()
-            if 'tiles_aerial' in dump:
+            if "tiles_aerial" in dump:
                 aerial = np.asarray(Image.open(dump["tiles_aerial"][ij]))
                 tiles[ij].aerial = aerial.transpose(2, 0, 1).copy()
         projection = Projection(*dump["ref_latlonalt"])
