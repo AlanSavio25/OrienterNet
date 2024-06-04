@@ -238,7 +238,7 @@ def plot_example_single(
 
     if out_dir is not None:
         name_ = name.replace("/", "_")
-        p = str(out_dir / f"{scene}_{name_}_{{}}.pdf")
+        p = str(out_dir / f"{idx}_{scene}_{name_}_{{}}.png")
         save_plot(p.format("pred"))
         plt.close()
 
@@ -269,10 +269,23 @@ def plot_example_single(
     if not plot_bev:
         return
 
-    scales_scores = pred["pixel_scales"]
+    scales_scores = pred["pixel_scales"] # [..., 2:-7]
+    if model is not None:
+        max_depth = model.model.conf.bev_mapper.z_max
+    else:
+        max_depth = 128.
+    if max_depth == 256.:
+        scales_scores[..., -10:] = 0 # 256m
+    elif max_depth == 128.:
+        scales_scores[..., -10:] = 0 # 128m
+    elif max_depth == 64.:
+        scales_scores[..., :2] = scales_scores[..., -10:] = 0 # 64m
+    elif max_depth == 32.:
+        scales_scores[..., :6] = scales_scores[..., -7:] = 0 # 32m
+    max_scoring_scale = scales_scores.max(-1).indices  # scale with highest score
+
 
     log_prob = torch.nn.functional.log_softmax(scales_scores, dim=-1)
-    max_scoring_scale = log_prob.max(-1).indices  # scale with highest score
     scales_exp = torch.sum(log_prob.exp() * torch.arange(scales_scores.shape[-1]), -1)
     max_score = log_prob.max(-1).values.exp()
     total_score = torch.logsumexp(scales_scores, -1)
@@ -321,6 +334,10 @@ def plot_example_single(
     else:
         plt.show()
 
+    if out_dir is not None:
+        save_plot(p.format("bev"))
+        plt.close()
+
     origins = ["upper", "upper", "upper", "upper"]
     plot_images(
         [max_scoring_scale, scales_exp, max_score, total_score],
@@ -347,7 +364,7 @@ def plot_example_single(
         plt.show()
 
     if out_dir is not None:
-        save_plot(p.format("bev"))
+        save_plot(p.format("scales"))
         plt.close()
 
     return plots
