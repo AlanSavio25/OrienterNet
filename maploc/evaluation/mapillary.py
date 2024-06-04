@@ -97,6 +97,8 @@ if __name__ == "__main__":
     parser.add_argument("--sequential", action="store_true")
     parser.add_argument("--output_dir", type=Path)
     parser.add_argument("--num", type=int)
+    parser.add_argument("--plot_images", action="store_true")
+    parser.add_argument("--select_images_from_logs", type=lambda args: args.split(','))
     parser.add_argument("dotlist", nargs="*")
     args = parser.parse_args()
     cfg = OmegaConf.from_cli(args.dotlist)
@@ -107,4 +109,6 @@ if __name__ == "__main__":
         args.sequential,
         output_dir=args.output_dir,
         num=args.num,
+        plot_images=args.plot_images,
+        select_images_from_logs=args.select_images_from_logs
     )
