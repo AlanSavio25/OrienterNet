@@ -20,7 +20,7 @@ from ..models.metrics import AngleError, LateralLongitudinalError, Location2DErr
 from ..models.sequential import GPSAligner, RigidAligner
 from ..models.voting import argmax_xyr, fuse_gps
 from ..module import GenericModule
-from ..utils.io import DATA_URL, download_file
+from ..utils.io import DATA_URL, download_file, read_json
 from .utils import write_dump
 from .viz import plot_example_sequential, plot_example_single
 
@@ -59,6 +59,7 @@ def evaluate_single_image(
     progress: bool = True,
     mask_index: Optional[Tuple[int]] = None,
     has_gps: bool = False,
+    **kwargs
 ):
     ppm = model.model.conf.pixel_per_meter
     metrics = MetricCollection(model.model.metrics())
@@ -69,10 +70,16 @@ def evaluate_single_image(
         metrics["yaw_fused_error"] = AngleError("tile_T_fused")
     metrics = metrics.to(model.device)
 
+    names = []
     for i, batch_ in enumerate(
         islice(tqdm(dataloader, total=num, disable=not progress), num)
     ):
         batch = model.transfer_batch_to_device(batch_, model.device, i)
+
+        if kwargs.get("selected_images"):
+            if batch["name"] in kwargs.get("selected_images"):
+                continue
+
         # Ablation: mask semantic classes
         if mask_index is not None:
             mask = batch["map"][0, mask_index[0]] == (mask_index[1] + 1)
@@ -103,6 +110,7 @@ def evaluate_single_image(
 
             pred["tile_t_gps"] = Transform2D.from_pixels(map_t_gps, 1 / ppm)
             del ij_fused, uvt_fused, yaw_fused
+        names += batch["name"]
 
         results = metrics(pred, batch)
         if callback is not None:
@@ -111,7 +119,7 @@ def evaluate_single_image(
             )
         del batch_, batch, pred, results
 
-    return metrics.cpu()
+    return metrics.cpu(), names
 
 
 @torch.no_grad()
@@ -212,6 +220,32 @@ def evaluate_sequential(
     return metrics.cpu()
 
 
+def select_images_from_log(log_paths):
+
+
+    if len(log_paths) == 0:
+        raise ValueError("At least one log path must be provided")
+    elif len(log_paths) == 1:
+        raise NotImplementedError
+    if len(log_paths) > 1:
+
+        logs = {}
+
+        sorted_names = None
+        for i, log_path in enumerate(log_paths):
+            log_data = read_json(Path(log_path))
+            if not log_data:
+                raise ValueError("Log data is empty")
+            print(log_data)
+            sorted_names = sorted(log_data["names"])
+            logs[i] = list(zip(log_data["errors"]["xy_max_error"], log_data["names"]))
+            logs[i] = [err for err, _ in sorted(logs[i], key=lambda x: x[1])]
+
+        diff = np.array(logs[0]) - np.array(logs[len(log_paths)-1])
+        selected_images = [n for value, n in zip(diff, sorted_names)]
+
+    return selected_images[:20]
+
 def evaluate(
     experiment: str,
     cfg: DictConfig,
@@ -240,29 +274,32 @@ def evaluate(
     dataset.prepare_data()
     dataset.setup()
 
+    plot_images = kwargs.get("plot_images")
     if output_dir is not None:
         output_dir.mkdir(exist_ok=True, parents=True)
-        if callback is None:
+        if callback is None and plot_images:
             if sequential:
                 callback = plot_example_sequential
             else:
                 callback = plot_example_single
             callback = functools.partial(
-                callback, out_dir=output_dir, **(viz_kwargs or {})
+                callback, out_dir=output_dir, return_plots=True, **(viz_kwargs or {})
             )
     kwargs = {**kwargs, "callback": callback}
 
+    if kwargs.get("select_images_from_logs"):
+        kwargs["selected_images"] = select_images_from_log(kwargs.get("select_images_from_logs"))
     seed_everything(dataset.cfg.seed)
     if sequential:
         dset, chunk2idx = dataset.sequence_dataset(split, **cfg.chunking)
         metrics = evaluate_sequential(dset, chunk2idx, model, **kwargs)
     else:
         loader = dataset.dataloader(split, shuffle=True, num_workers=num_workers)
-        metrics = evaluate_single_image(loader, model, **kwargs)
+        metrics, names = evaluate_single_image(loader, model, **kwargs)
 
     results = metrics.compute()
     logger.info("All results: %s", results)
-    if output_dir is not None:
-        write_dump(output_dir, experiment, cfg, results, metrics)
+    if output_dir is not None and not plot_images:
+        write_dump(output_dir, experiment, cfg, results, metrics, names)
         logger.info("Outputs have been written to %s.", output_dir)
     return metrics

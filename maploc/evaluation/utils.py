@@ -27,12 +27,13 @@ def compute_auc(errors, recall, thresholds):
     return aucs
 
 
-def write_dump(output_dir, experiment, cfg, results, metrics):
+def write_dump(output_dir, experiment, cfg, results, metrics, names):
     dump = {
         "experiment": experiment,
         "cfg": OmegaConf.to_container(cfg),
         "results": results,
         "errors": {},
+        "names": names
     }
     for k, m in metrics.items():
         if hasattr(m, "get_errors"):

@@ -238,7 +238,7 @@ def plot_example_single(
 
     if out_dir is not None:
         name_ = name.replace("/", "_")
-        p = str(out_dir / f"{scene}_{name_}_{{}}.pdf")
+        p = str(out_dir / f"{scene}_{name_}_{{}}.png")
         save_plot(p.format("pred"))
         plt.close()
 
