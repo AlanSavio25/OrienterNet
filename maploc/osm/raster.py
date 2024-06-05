@@ -16,7 +16,7 @@ class Canvas:
         self.bbox = bbox
         self.ppm = ppm
         self.scaling = bbox.size * ppm
-        self.w, self.h = np.ceil(self.scaling).astype(int)
+        self.w, self.h = np.ceil(self.scaling - 1e-7).astype(int)
         self.clear()
 
     def clear(self):
