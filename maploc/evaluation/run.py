@@ -77,7 +77,7 @@ def evaluate_single_image(
         batch = model.transfer_batch_to_device(batch_, model.device, i)
 
         if kwargs.get("selected_images"):
-            if batch["name"] in kwargs.get("selected_images"):
+            if batch["name"][0] not in kwargs.get("selected_images"):
                 continue
 
         # Ablation: mask semantic classes
@@ -236,13 +236,12 @@ def select_images_from_log(log_paths):
             log_data = read_json(Path(log_path))
             if not log_data:
                 raise ValueError("Log data is empty")
-            print(log_data)
             sorted_names = sorted(log_data["names"])
             logs[i] = list(zip(log_data["errors"]["xy_max_error"], log_data["names"]))
             logs[i] = [err for err, _ in sorted(logs[i], key=lambda x: x[1])]
 
-        diff = np.array(logs[0]) - np.array(logs[len(log_paths)-1])
-        selected_images = [n for value, n in zip(diff, sorted_names)]
+        diff = - np.array(logs[0]) + np.array(logs[len(log_paths)-1])
+        selected_images = [n for value, n in sorted(list(zip(diff, sorted_names)), key=lambda x: x[0])]
 
     return selected_images[:20]
 
