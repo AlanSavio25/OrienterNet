@@ -175,8 +175,8 @@ def train(cfg: DictConfig, job_id: Optional[int] = None):
         CleanProgressBar(),
         ConsoleLogger(),
     ]
-    if cfg.experiment.gpus > 0:
-        callbacks.append(pl.callbacks.DeviceStatsMonitor())
+    # if cfg.experiment.gpus > 0:
+    #     callbacks.append(pl.callbacks.DeviceStatsMonitor())
 
     trainer = pl.Trainer(
         default_root_dir=experiment_dir,
