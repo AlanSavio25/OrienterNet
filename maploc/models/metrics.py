@@ -46,8 +46,7 @@ class AngleRecall(torchmetrics.MeanMetric):
         error = angle_error(pred[self.key].angle, data["tile_T_cam"].angle)
         super().update((error <= self.threshold).float())
 
-
-class ExhaustiveEntropy(torchmetrics.MeanMetric):
+class ExhaustiveEntropy(MeanMetricWithRecall):
     def __init__(self, key="log_probs", *args, **kwargs):
         self.key = key
         super().__init__(*args, **kwargs)
@@ -57,8 +56,10 @@ class ExhaustiveEntropy(torchmetrics.MeanMetric):
         probs = log_probs.exp()
         entropy = -torch.sum(probs * (probs + 1e-9).log())
         n = torch.prod(torch.tensor(probs.shape)).to(entropy)
-        norm_entropy = entropy / torch.log(n)  # between 0 and 1
-        super().update(norm_entropy.float())
+        norm_entropy = entropy / torch.log(n)  # [0, 1]
+        value = norm_entropy
+        self.value.append(value.float())
+        # super().update(norm_entropy.float())
 
 class MeanMetricWithRecall(torchmetrics.Metric):
     full_state_update = True
