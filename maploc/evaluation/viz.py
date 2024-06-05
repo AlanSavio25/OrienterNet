@@ -191,6 +191,12 @@ def plot_example_single(
         color="w",
     )
 
+    if out_dir is not None:
+        name_ = name.replace("/", "_")
+        p = str(out_dir / f"{idx}_{scene}_{name_}_{{}}.png")
+        save_plot(p.format("pred"))
+        plt.close()
+
     if return_plots:
         import matplotlib
 
@@ -236,11 +242,6 @@ def plot_example_single(
         else:
             plt.show()
 
-    if out_dir is not None:
-        name_ = name.replace("/", "_")
-        p = str(out_dir / f"{idx}_{scene}_{name_}_{{}}.png")
-        save_plot(p.format("pred"))
-        plt.close()
 
         if fig_for_paper:
             # !cp ../datasets/MGL/{scene}/images/{name}.jpg {out_dir}/{scene}_{name}.jpg
@@ -307,6 +308,7 @@ def plot_example_single(
     conf_q, feats_q_rgb, norm_map = [
         np.swapaxes(x, 0, 1) for x in [conf_q, feats_q_rgb, norm_map]
     ]
+
     if prior is not None:
         prior = np.swapaxes(prior, 0, 1)
     origins = ["lower", "lower", "lower"] + ([] if prior is None else ["lower"])
@@ -323,6 +325,10 @@ def plot_example_single(
         cmaps="jet",
     )
 
+    if out_dir is not None:
+        save_plot(p.format("bev"))
+        plt.close()
+
     if return_plots:
         # save the fig to a buffer
         buf = io.BytesIO()
@@ -334,9 +340,6 @@ def plot_example_single(
     else:
         plt.show()
 
-    if out_dir is not None:
-        save_plot(p.format("bev"))
-        plt.close()
 
     origins = ["upper", "upper", "upper", "upper"]
     plot_images(
@@ -351,6 +354,10 @@ def plot_example_single(
         dpi=50,
         cmaps="jet",
     )
+    if out_dir is not None:
+        save_plot(p.format("scales"))
+        plt.close()
+
 
     if return_plots:
         # save the fig to a buffer
@@ -362,10 +369,6 @@ def plot_example_single(
         plots.append(to_tensor(plot))
     else:
         plt.show()
-
-    if out_dir is not None:
-        save_plot(p.format("scales"))
-        plt.close()
 
     return plots
 
