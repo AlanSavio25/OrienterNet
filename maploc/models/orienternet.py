@@ -50,7 +50,7 @@ class OrienterNet(BaseModel):
         "add_temperature": False,
         "normalize_features": False,
         "padding_matching": "replicate",
-        "apply_map_prior": False,
+        "apply_map_prior": True,
         "do_label_smoothing": False,
         "sigma_xy": 1,
         "sigma_r": 2,
@@ -67,6 +67,7 @@ class OrienterNet(BaseModel):
         "normalize_scores_by_num_valid": True,
         "prior_renorm": True,
         "retrieval_dim": None,
+        "chop_bev": False
     }
 
     def _init(self, conf):
@@ -272,6 +273,14 @@ class OrienterNet(BaseModel):
             pred["bev"][key] for key in ["output", "valid_bev", "confidence"]
         ]
 
+        if self.conf.chop_bev:
+            pass
+            half_depth = f_bev.shape[-1]//2
+            f_bev = f_bev[..., :half_depth]
+            valid_bev = valid_bev[..., :half_depth]
+            confidence_bev = confidence_bev[..., :half_depth]
+
+
         all_valid_mask = torch.ones((f_map[:, 0, ...].shape)).to(valid_bev)
         map_mask = data.get("map_mask", all_valid_mask)
 
@@ -286,7 +295,6 @@ class OrienterNet(BaseModel):
                 )  # / valid_bev.sum((-1, -2))
             pred["bev"]["output"] = f_bev
 
-        log_prior = pred["semantic_map"]["log_prior"][0]
         if "semantic_map" in pred and "log_prior" in pred["semantic_map"]:
             log_prior = pred["semantic_map"]["log_prior"][0]
 
@@ -441,8 +449,10 @@ class OrienterNet(BaseModel):
             "xy_max_error": Location2DError("tile_T_cam_max"),
             "xy_expectation_error": Location2DError("tile_T_cam_expectation"),
             "yaw_max_error": AngleError("tile_T_cam_max"),
-            "xy_recall_2m": Location2DRecall(2.0, key="tile_T_cam_max"),
-            "xy_recall_5m": Location2DRecall(5.0, key="tile_T_cam_max"),
-            "yaw_recall_2°": AngleRecall(2.0, "tile_T_cam_max"),
-            "yaw_recall_5°": AngleRecall(5.0, "tile_T_cam_max"),
+            "xy_recall_02m": Location2DRecall(2.0, key="tile_T_cam_max"),
+            "xy_recall_05m": Location2DRecall(5.0, key="tile_T_cam_max"),
+            "xy_recall_10m": Location2DRecall(10.0, key="tile_T_cam_max"),
+            "yaw_recall_02°": AngleRecall(2.0, "tile_T_cam_max"),
+            "yaw_recall_05°": AngleRecall(5.0, "tile_T_cam_max"),
+            "yaw_recall_10°": AngleRecall(10.0, "tile_T_cam_max"),
         }
