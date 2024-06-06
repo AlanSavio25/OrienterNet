@@ -102,9 +102,10 @@ def plot_dense_rotations(
     )
     mask = (max_[0, 0] == masked.float()) & mask
     indices = np.where(mask.numpy() > 0)
+    stride = 1 if refactored else -1
     plot_pose(
         ax,
-        indices[:: (1 if refactored else -1)],
+        indices[:: stride],
         yaws[indices],
         s=s,
         c=c,
@@ -172,15 +173,7 @@ def plot_bev(bev, uv, yaw, ax=None, zorder=10, **kwargs):
     if ax is None:
         ax = plt.gca()
     h, w = bev.shape[:2]
-    tfm = mpl.transforms.Affine2D().translate(-w / 2, -h)
-    tfm = tfm.rotate_deg(yaw).translate(*uv + 0.5)
-    tfm += plt.gca().transData
-    ax.imshow(bev, transform=tfm, zorder=zorder, **kwargs)
-    ax.plot(
-        [0, w - 1, w / 2, 0],
-        [0, 0, h - 0.5, 0],
-        transform=tfm,
-        c="k",
-        lw=1,
-        zorder=zorder + 1,
-    )
+    tfm = mpl.transforms.Affine2D().translate(-w/2, 0)
+    tfm = tfm.rotate_deg(yaw-90).translate(*uv + 0.5)
+    tfm += ax.transData
+    ax.imshow(bev, transform=tfm, alpha=0.80, zorder=zorder, origin="lower", **kwargs)

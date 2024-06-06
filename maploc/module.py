@@ -75,7 +75,6 @@ class GenericModule(pl.LightningModule):
                 pred,
                 batch,
                 results,
-                plot_bev=True,
                 out_dir=None,
                 show_gps=True,
                 return_plots=True,
