@@ -23,7 +23,7 @@ model:
       num_downsample: 3
       decoder: [128, 64, 64]
       padding: replicate
-    unary_prior: true
+    unary_prior: false
   # aerial_encoder:
   #   backbone:
   #     encoder: resnet50
@@ -48,7 +48,7 @@ model:
         - ${...latent_dim}
       apply_input_activation: false
       input_dim: ${eval:'${...latent_dim} + 1'}
-    mode: inverse # inverse # inverse for SNAP-like BEV
+    mode: inverse
     z_min: 1.0
     z_max: # 32.0 # depth
     x_max: # 32.0

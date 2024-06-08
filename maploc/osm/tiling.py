@@ -7,7 +7,7 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import rtree
-import tiledwebmaps as twm
+# import tiledwebmaps as twm
 from PIL import Image
 from tqdm import tqdm
 
