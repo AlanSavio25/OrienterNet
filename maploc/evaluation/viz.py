@@ -16,6 +16,7 @@ from ..utils.viz_localization import (
     likelihood_overlay,
     plot_dense_rotations,
     plot_pose,
+    plot_bev,
 )
 
 
@@ -25,7 +26,6 @@ def plot_example_single(
     pred,
     data,
     results,
-    plot_bev=True,
     out_dir=None,
     fig_for_paper=False,
     show_gps=False,
@@ -33,6 +33,7 @@ def plot_example_single(
     show_dir_error=False,
     show_masked_prob=False,
     return_plots=False,
+    overlay_bev=True
 ):
 
     # map_T_cam (or m_T_c): Transform of cam in pixel space.
@@ -140,20 +141,26 @@ def plot_example_single(
     # )
     ### DONE
 
+
     plot_images(
         [image, *maps_viz, overlay, logl, feats_map_rgb],
         titles=[text1, *maps_titles, "likelihood", "log-likelihood", "neural map"],
         origins=["upper", *["lower"] * len(maps_viz), "lower", "lower", "lower"],
         dpi=75,
         cmaps="jet",
-    )
+        )
     fig = plt.gcf()
     axes = fig.axes
+    if overlay_bev:
+        (bev,) = features_to_RGB(pred["features_bev"].numpy(), masks=[pred["valid_bev"].numpy()])
+        bev = np.swapaxes(bev, 0, 1)
+        plot_bev(bev, uv=m_t_c_pred, yaw=yaw_p, zorder=10, ax=axes[1])
     axes[1].images[0].set_interpolation("none")
     axes[2].images[0].set_interpolation("none")
     Colormap.add_colorbar()
     # if "semantic_map" in pred:
     #     plot_nodes(1, rasters[2], refactored=True)
+
 
     if show_gps and m_t_gps is not None:
         plot_pose(
@@ -173,6 +180,8 @@ def plot_example_single(
         c="k",
         refactored=True,
     )
+    
+
     plot_dense_rotations(2 if len(maps_viz) == 1 else 3, lp_ijt.exp(), refactored=True)
     # inset_center = m_t_c_pred if results["xy_max_error"] < 5 else m_t_c_gt
 
@@ -212,6 +221,8 @@ def plot_example_single(
     else:
         plt.show()
 
+
+
     if len(maps_viz) > 1:
         # TODO: plot a new row containing each map norm
 
@@ -243,32 +254,30 @@ def plot_example_single(
             plt.show()
 
 
-        if fig_for_paper:
-            # !cp ../datasets/MGL/{scene}/images/{name}.jpg {out_dir}/{scene}_{name}.jpg
-            plot_images([map_viz])
-            plt.gca().images[0].set_interpolation("none")
-            plot_nodes(0, rasters[2])
-            plot_pose([0], m_t_c_gt, yaw_gt, c="red")
-            plot_pose([0], m_t_c_pred, yaw_p, c="k")
-            save_plot(p.format("map"))
-            plt.close()
-            plot_images([lp_ij], cmaps="jet")
-            plot_dense_rotations(0, lp_ijt.exp())
-            save_plot(p.format("loglikelihood"), dpi=100)
-            plt.close()
-            plot_images([overlay])
-            plt.gca().images[0].set_interpolation("none")
-            axins = add_circle_inset(plt.gca(), inset_center)
-            axins.scatter(*m_t_c_gt, lw=1, c="red", ec="k", s=50)
-            save_plot(p.format("likelihood"))
-            plt.close()
-            write_torch_image(
-                p.format("neuralmap").replace("pdf", "jpg"), feats_map_rgb
-            )
-            write_torch_image(p.format("image").replace("pdf", "jpg"), image.numpy())
+    if fig_for_paper:
+        # !cp ../datasets/MGL/{scene}/images/{name}.jpg {out_dir}/{scene}_{name}.jpg
+        plot_images([map_viz])
+        plt.gca().images[0].set_interpolation("none")
+        plot_nodes(0, rasters[2])
+        plot_pose([0], m_t_c_gt, yaw_gt, c="red")
+        plot_pose([0], m_t_c_pred, yaw_p, c="k")
+        save_plot(p.format("map"))
+        plt.close()
+        plot_images([lp_ij], cmaps="jet")
+        plot_dense_rotations(0, lp_ijt.exp())
+        save_plot(p.format("loglikelihood"), dpi=100)
+        plt.close()
+        plot_images([overlay])
+        plt.gca().images[0].set_interpolation("none")
+        axins = add_circle_inset(plt.gca(), inset_center)
+        axins.scatter(*m_t_c_gt, lw=1, c="red", ec="k", s=50)
+        save_plot(p.format("likelihood"))
+        plt.close()
+        write_torch_image(
+            p.format("neuralmap").replace("pdf", "jpg"), feats_map_rgb
+        )
+        write_torch_image(p.format("image").replace("pdf", "jpg"), image.numpy())
 
-    if not plot_bev:
-        return
 
     scales_scores = pred["pixel_scales"] # [..., 2:-7]
     if model is not None:
@@ -379,7 +388,6 @@ def plot_example_sequential(
     pred,
     data,
     results,
-    plot_bev=True,
     out_dir=None,
     fig_for_paper=False,
     show_gps=False,
