@@ -67,3 +67,5 @@ model:
       output_dim: ${...matching_dim}
       confidence: true
   ransac_matcher: false
+  chop_bev: false
+  normalize_features: false
