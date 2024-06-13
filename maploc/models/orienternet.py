@@ -67,7 +67,7 @@ class OrienterNet(BaseModel):
         "normalize_scores_by_num_valid": True,
         "prior_renorm": True,
         "retrieval_dim": None,
-        "chop_bev": False
+        "chop_bev": False,
     }
 
     def _init(self, conf):
@@ -274,12 +274,8 @@ class OrienterNet(BaseModel):
         ]
 
         if self.conf.chop_bev:
-            pass
-            half_depth = f_bev.shape[-1]//2
-            f_bev = f_bev[..., :half_depth]
-            valid_bev = valid_bev[..., :half_depth]
-            confidence_bev = confidence_bev[..., :half_depth]
-
+            half_depth = f_bev.shape[-1] // 4
+            valid_bev[..., half_depth:] = False
 
         all_valid_mask = torch.ones((f_map[:, 0, ...].shape)).to(valid_bev)
         map_mask = data.get("map_mask", all_valid_mask)
@@ -449,10 +445,16 @@ class OrienterNet(BaseModel):
             "xy_max_error": Location2DError("tile_T_cam_max"),
             "xy_expectation_error": Location2DError("tile_T_cam_expectation"),
             "yaw_max_error": AngleError("tile_T_cam_max"),
+            "xy_recall_0_5m": Location2DRecall(0.5, key="tile_T_cam_max"),
+            "xy_recall_01m": Location2DRecall(1.0, key="tile_T_cam_max"),
             "xy_recall_02m": Location2DRecall(2.0, key="tile_T_cam_max"),
             "xy_recall_05m": Location2DRecall(5.0, key="tile_T_cam_max"),
             "xy_recall_10m": Location2DRecall(10.0, key="tile_T_cam_max"),
+            "xy_recall_20m": Location2DRecall(20.0, key="tile_T_cam_max"),
+            "yaw_recall_0_5°": AngleRecall(0.5, "tile_T_cam_max"),
+            "yaw_recall_01°": AngleRecall(1.0, "tile_T_cam_max"),
             "yaw_recall_02°": AngleRecall(2.0, "tile_T_cam_max"),
             "yaw_recall_05°": AngleRecall(5.0, "tile_T_cam_max"),
             "yaw_recall_10°": AngleRecall(10.0, "tile_T_cam_max"),
+            "yaw_recall_20°": AngleRecall(20.0, "tile_T_cam_max"),
         }
