@@ -305,7 +305,7 @@ class BEVMapper(BaseModel):
                 )
 
             grid_height = self.conf.grid_height
-            cell_size = self.conf.grid_cell_size
+            cell_size = 0.5
             z = torch.arange(0, grid_height, cell_size) + z_offset + cell_size / 2
             xy, z = torch.broadcast_tensors(
                 xy[:, :, :, None, :], z[None, None, None, :, None]
