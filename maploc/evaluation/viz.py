@@ -33,7 +33,7 @@ def plot_example_single(
     show_dir_error=False,
     show_masked_prob=False,
     return_plots=False,
-    overlay_bev=True
+    overlay_bev=True,
 ):
 
     # map_T_cam (or m_T_c): Transform of cam in pixel space.
@@ -88,12 +88,12 @@ def plot_example_single(
 
     maps_viz = []
     maps_titles = []
-    if "semantic_map" in pred:
+    if "semantic_map" in data:
         rasters = data["semantic_map"]
         map_viz = Colormap.apply(rasters)
         maps_titles.append("semantic map")
         maps_viz.append(map_viz)
-    if "aerial_map" in pred:
+    if "aerial_map" in data:
         aerial_map = data["aerial_map"].permute(1, 2, 0) / 255.0
         maps_titles.append("aerial map")
         maps_viz.append(aerial_map.numpy())
@@ -141,26 +141,28 @@ def plot_example_single(
     # )
     ### DONE
 
-
     plot_images(
         [image, *maps_viz, overlay, logl, feats_map_rgb],
         titles=[text1, *maps_titles, "likelihood", "log-likelihood", "neural map"],
         origins=["upper", *["lower"] * len(maps_viz), "lower", "lower", "lower"],
         dpi=75,
         cmaps="jet",
-        )
+    )
     fig = plt.gcf()
     axes = fig.axes
-    if overlay_bev:
-        (bev,) = features_to_RGB(pred["features_bev"].numpy(), masks=[pred["valid_bev"].numpy()])
-        bev = np.swapaxes(bev, 0, 1)
-        plot_bev(bev, uv=m_t_c_pred, yaw=yaw_p, zorder=10, ax=axes[1])
     axes[1].images[0].set_interpolation("none")
     axes[2].images[0].set_interpolation("none")
     Colormap.add_colorbar()
+
     # if "semantic_map" in pred:
     #     plot_nodes(1, rasters[2], refactored=True)
 
+    if overlay_bev:
+        (bev,) = features_to_RGB(
+            pred["features_bev"].numpy(), masks=[pred["valid_bev"].numpy()]
+        )
+        bev = np.swapaxes(bev, 0, 1)
+        plot_bev(bev, uv=m_t_c_pred, yaw=yaw_p, zorder=10, ax=axes[1])
 
     if show_gps and m_t_gps is not None:
         plot_pose(
@@ -180,7 +182,6 @@ def plot_example_single(
         c="k",
         refactored=True,
     )
-    
 
     plot_dense_rotations(2 if len(maps_viz) == 1 else 3, lp_ijt.exp(), refactored=True)
     # inset_center = m_t_c_pred if results["xy_max_error"] < 5 else m_t_c_gt
@@ -202,7 +203,9 @@ def plot_example_single(
 
     if out_dir is not None:
         name_ = name.replace("/", "_")
-        p = str(out_dir / f"{idx}_{scene}_{name_}_{{}}.png")
+        p = str(
+            out_dir / f"{idx}_{results['xy_max_error']:.1f}_{scene}_{name_}_{{}}.png"
+        )
         save_plot(p.format("pred"))
         plt.close()
 
@@ -221,38 +224,52 @@ def plot_example_single(
     else:
         plt.show()
 
-
+    # plot_images(
+    #     [image, *maps_viz],
+    #     titles=[],
+    #     origins=["upper", *["lower"] * len(maps_viz)],
+    #     dpi=75,
+    #     cmaps="jet",
+    #     )
+    # # plot_pose(
+    # #     [1] + ([2] if len(maps_viz) > 1 else []),
+    # #     m_t_c_gt,
+    # #     yaw_gt,
+    # #     c="red",
+    # #     refactored=True,
+    # # )
+    # plt.savefig("TrainingData1.png")
 
     if len(maps_viz) > 1:
+        pass
         # TODO: plot a new row containing each map norm
 
-        semantic_feats_map = pred["semantic_map"]["map_features"][0]
-        aerial_feats_map = pred["aerial_map"]
-        (feats_map_rgb_semantic,) = features_to_RGB(semantic_feats_map.numpy())
-        (feats_map_rgb_aerial,) = features_to_RGB(aerial_feats_map.numpy())
-        feats_map_rgb_semantic, feats_map_rgb_aerial = [
-            np.swapaxes(x, 0, 1) for x in (feats_map_rgb_semantic, feats_map_rgb_aerial)
-        ]
-        plot_images(
-            [feats_map_rgb_semantic, feats_map_rgb_aerial],
-            titles=["semantic neural map", "aerial neural map"],
-            origins=["lower", "lower"],
-            dpi=75,
-            cmaps="jet",
-        )
+        # semantic_feats_map = pred["semantic_map"]["map_features"][0]
+        # aerial_feats_map = pred["aerial_map"]
+        # (feats_map_rgb_semantic,) = features_to_RGB(semantic_feats_map.numpy())
+        # (feats_map_rgb_aerial,) = features_to_RGB(aerial_feats_map.numpy())
+        # feats_map_rgb_semantic, feats_map_rgb_aerial = [
+        #     np.swapaxes(x, 0, 1) for x in (feats_map_rgb_semantic, feats_map_rgb_aerial)
+        # ]
+        # plot_images(
+        #     [feats_map_rgb_semantic, feats_map_rgb_aerial],
+        #     titles=["semantic neural map", "aerial neural map"],
+        #     origins=["lower", "lower"],
+        #     dpi=75,
+        #     cmaps="jet",
+        # )
 
-        if return_plots:
-            # save the fig to a buffer
-            buf = io.BytesIO()
-            plt.savefig(buf, format="png")
-            plt.close(fig)
-            buf.seek(0)
-            plot = Image.open(buf)
-            plots.append(to_tensor(plot))
+        # if return_plots:
+        #     # save the fig to a buffer
+        #     buf = io.BytesIO()
+        #     plt.savefig(buf, format="png")
+        #     plt.close(fig)
+        #     buf.seek(0)
+        #     plot = Image.open(buf)
+        #     plots.append(to_tensor(plot))
 
-        else:
-            plt.show()
-
+        # else:
+        #     plt.show()
 
     if fig_for_paper:
         # !cp ../datasets/MGL/{scene}/images/{name}.jpg {out_dir}/{scene}_{name}.jpg
@@ -273,27 +290,23 @@ def plot_example_single(
         axins.scatter(*m_t_c_gt, lw=1, c="red", ec="k", s=50)
         save_plot(p.format("likelihood"))
         plt.close()
-        write_torch_image(
-            p.format("neuralmap").replace("pdf", "jpg"), feats_map_rgb
-        )
+        write_torch_image(p.format("neuralmap").replace("pdf", "jpg"), feats_map_rgb)
         write_torch_image(p.format("image").replace("pdf", "jpg"), image.numpy())
 
-
-    scales_scores = pred["pixel_scales"] # [..., 2:-7]
+    scales_scores = pred["pixel_scales"]  # [..., 2:-7]
     if model is not None:
         max_depth = model.model.conf.bev_mapper.z_max
     else:
-        max_depth = 128.
-    if max_depth == 256.:
-        scales_scores[..., -10:] = 0 # 256m
-    elif max_depth == 128.:
-        scales_scores[..., -10:] = 0 # 128m
-    elif max_depth == 64.:
-        scales_scores[..., :2] = scales_scores[..., -10:] = 0 # 64m
-    elif max_depth == 32.:
-        scales_scores[..., :6] = scales_scores[..., -7:] = 0 # 32m
+        max_depth = 128.0
+    if max_depth == 256.0:
+        scales_scores[..., -10:] = 0  # 256m
+    elif max_depth == 128.0:
+        scales_scores[..., -10:] = 0  # 128m
+    elif max_depth == 64.0:
+        scales_scores[..., :2] = scales_scores[..., -10:] = 0  # 64m
+    elif max_depth == 32.0:
+        scales_scores[..., :6] = scales_scores[..., -7:] = 0  # 32m
     max_scoring_scale = scales_scores.max(-1).indices  # scale with highest score
-
 
     log_prob = torch.nn.functional.log_softmax(scales_scores, dim=-1)
     scales_exp = torch.sum(log_prob.exp() * torch.arange(scales_scores.shape[-1]), -1)
@@ -349,12 +362,13 @@ def plot_example_single(
     else:
         plt.show()
 
+    (feats_image,) = features_to_RGB(pred["features_image"].numpy())
 
     origins = ["upper", "upper", "upper", "upper"]
     plot_images(
-        [max_scoring_scale, scales_exp, max_score, total_score],
+        [feats_image, scales_exp, max_score, total_score],
         titles=[
-            "Max scoring scale",
+            "Image Features",
             "Expected scale",
             "Max Score",
             "Total score",
@@ -366,7 +380,6 @@ def plot_example_single(
     if out_dir is not None:
         save_plot(p.format("scales"))
         plt.close()
-
 
     if return_plots:
         # save the fig to a buffer
