@@ -371,6 +371,28 @@ class BEVMapper(BaseModel):
             bev = self.vertical_pooling({"features": f_grid, "valid": valid})
             f_bev, valid_bev = bev["features"], bev["valid"]
 
+            # Enforce a BEV shape of [129,64].
+            # This allows us to generate a finer larger BEV and then downsample for memory efficiency
+            if self.conf.grid_cell_size != 1 / self.conf.pixel_per_meter:
+                h = int((self.conf.x_max * 2 * self.conf.pixel_per_meter) + 1)
+                w = int(self.conf.z_max * self.conf.pixel_per_meter)
+                f_bev = torch.nn.functional.interpolate(
+                    f_bev.moveaxis(-1, -3),
+                    size=(h, w),
+                    mode="bilinear",
+                    align_corners=True,
+                ).moveaxis(-3, -1)
+                nan_mask = torch.where(valid_bev, 0, torch.nan)
+                nan_mask = torch.nn.functional.interpolate(
+                    nan_mask.unsqueeze(1),
+                    size=(h, w),
+                    mode="bilinear",
+                    align_corners=True,
+                ).squeeze(1)
+                valid_bev = ~torch.isnan(nan_mask)
+
+            assert list(f_bev.shape[-3:-1]) == [129, 64] == list(valid_bev.shape[-2:])
+
             # Forward pooled BEV features through BEV Net
             # SNAP doesn't use a bev_net. Worth checking if it helps
             if self.conf.bev_net is None:
