@@ -12,7 +12,7 @@ import numpy as np
 import pytorch_lightning as pl
 import torch
 import torch.utils.data as torchdata
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig, OmegaConf, ListConfig
 
 from ... import DATASETS_PATH, logger
 from ...osm.tiling import TileManager
@@ -77,14 +77,20 @@ class MapillaryDataModule(pl.LightningDataModule):
         self.local_dir = self.cfg.local_dir  # or os.environ.get("TMPDIR")
         if self.local_dir is not None:
             self.local_dir = Path(self.local_dir, "MGL")
-        if self.cfg.crop_size_meters < self.cfg.max_init_error:
+        if np.all(
+            np.array(self.cfg.crop_size_meters) < np.array(self.cfg.max_init_error)
+        ):
             raise ValueError("The ground truth location can be outside the map.")
 
     def prepare_data(self):
         for scene in self.cfg.scenes:
             dump_dir = self.root / scene
             assert (dump_dir / self.dump_filename).exists(), dump_dir
-            assert (dump_dir / self.cfg.tiles_filename).exists(), dump_dir
+            if isinstance(self.cfg.tiles_filename, ListConfig):
+                for tiles_filename in self.cfg.tiles_filename:
+                    assert (dump_dir / tiles_filename).exists(), dump_dir
+            else:
+                assert (dump_dir / self.cfg.tiles_filename).exists(), dump_dir
             if self.local_dir is None:
                 assert (dump_dir / self.images_dirname).exists(), dump_dir
                 continue
@@ -108,27 +114,54 @@ class MapillaryDataModule(pl.LightningDataModule):
             logger.info("Loading scene %s.", scene)
             dump_dir = self.root / scene
             logger.info("Loading map tiles %s.", self.cfg.tiles_filename)
-            self.tile_managers[scene] = TileManager.load(
-                dump_dir / self.cfg.tiles_filename
-            )
-            groups = self.tile_managers[scene].groups
-            if self.cfg.num_classes:  # check consistency
-                if set(groups.keys()) != set(self.cfg.num_classes.keys()):
+            if isinstance(self.cfg.tiles_filename, ListConfig):
+                self.tile_managers[scene] = [
+                    TileManager.load(dump_dir / tiles_filename)
+                    for tiles_filename in self.cfg.tiles_filename
+                ]
+                groups = [
+                    tile_manager.groups for tile_manager in self.tile_managers[scene]
+                ]
+                if self.cfg.num_classes:  # check consistency
+                    for i in range(len(groups)):
+                        if set(groups[i].keys()) != set(self.cfg.num_classes.keys()):
+                            raise ValueError(
+                                "Inconsistent groups: "
+                                f"{groups[i].keys()} {self.cfg.num_classes.keys()}"
+                            )
+                        for k in groups[i]:
+                            if len(groups[i][k]) != self.cfg.num_classes[k]:
+                                raise ValueError(
+                                    f"{k}: {len(groups[i][k])} vs {self.cfg.num_classes[k]}"
+                                )
+                ppm = [tile_manager.ppm for tile_manager in self.tile_managers[scene]]
+                if not np.all(np.array(ppm) == np.array(self.cfg.pixel_per_meter)):
                     raise ValueError(
-                        "Inconsistent groups: "
-                        f"{groups.keys()} {self.cfg.num_classes.keys()}"
+                        "The tile manager and the config/model have different ground "
+                        f"resolutions: {ppm} vs {self.cfg.pixel_per_meter}"
                     )
-                for k in groups:
-                    if len(groups[k]) != self.cfg.num_classes[k]:
-                        raise ValueError(
-                            f"{k}: {len(groups[k])} vs {self.cfg.num_classes[k]}"
-                        )
-            ppm = self.tile_managers[scene].ppm
-            if ppm != self.cfg.pixel_per_meter:
-                raise ValueError(
-                    "The tile manager and the config/model have different ground "
-                    f"resolutions: {ppm} vs {self.cfg.pixel_per_meter}"
+            else:
+                self.tile_managers[scene] = TileManager.load(
+                    dump_dir / self.cfg.tiles_filename
                 )
+                groups = self.tile_managers[scene].groups
+                if self.cfg.num_classes:  # check consistency
+                    if set(groups.keys()) != set(self.cfg.num_classes.keys()):
+                        raise ValueError(
+                            "Inconsistent groups: "
+                            f"{groups.keys()} {self.cfg.num_classes.keys()}"
+                        )
+                    for k in groups:
+                        if len(groups[k]) != self.cfg.num_classes[k]:
+                            raise ValueError(
+                                f"{k}: {len(groups[k])} vs {self.cfg.num_classes[k]}"
+                            )
+                ppm = self.tile_managers[scene].ppm
+                if ppm != self.cfg.pixel_per_meter:
+                    raise ValueError(
+                        "The tile manager and the config/model have different ground "
+                        f"resolutions: {ppm} vs {self.cfg.pixel_per_meter}"
+                    )
 
             logger.info("Loading dump json file %s.", self.dump_filename)
             with (dump_dir / self.dump_filename).open("r") as fp:
