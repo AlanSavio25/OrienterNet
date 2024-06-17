@@ -3,15 +3,16 @@ from torch.nn.functional import normalize
 
 from .base import BaseModel
 
+
 class MLP(BaseModel):
     """A simple MLP"""
 
     default_conf = {
         "activation": "ReLU",
-        "layers": [], # outputdim for each layer
+        "layers": [],  # outputdim for each layer
         "apply_input_activation": True,
         "input_dim": "???",
-        "output_dim": "???"
+        "output_dim": "???",
     }
 
     def _init(self, conf):
@@ -19,7 +20,7 @@ class MLP(BaseModel):
         # initialize torch nn linear layer
         activation = getattr(nn, conf.activation)
         input_dim = conf.input_dim
-        
+
         layers = []
         for i, output_dim in enumerate(conf.layers):
             if i > 0 or conf.apply_input_activation:
