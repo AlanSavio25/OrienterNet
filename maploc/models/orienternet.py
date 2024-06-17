@@ -280,6 +280,16 @@ class OrienterNet(BaseModel):
         all_valid_mask = torch.ones((f_map[:, 0, ...].shape)).to(valid_bev)
         map_mask = data.get("map_mask", all_valid_mask)
 
+        if map_mask.shape[-2:] != f_map.shape[-2:]:
+            nan_mask = torch.where(map_mask, 0, torch.nan)
+            nan_mask = torch.nn.functional.interpolate(
+                nan_mask.unsqueeze(1),
+                size=tuple(f_map.shape[-2:]),
+                mode="bilinear",
+                align_corners=False,
+            ).squeeze(1)
+            map_mask = ~torch.isnan(nan_mask)
+
         if self.conf.use_map_cutout:  # for evaluating matchers
             f_bev, valid_cutout = neural_cutout(
                 self.bev_mapper.bev_ij_pts, f_map, data["map_T_cam"]
