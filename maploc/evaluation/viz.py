@@ -98,6 +98,21 @@ def plot_example_single(
         maps_titles.append("aerial map")
         maps_viz.append(aerial_map.numpy())
 
+    maps_viz = [
+        (
+            torch.nn.functional.interpolate(
+                torch.from_numpy(m).moveaxis(-1, -3).unsqueeze(1),
+                size=tuple(prob.shape),
+            )
+            .squeeze(1)
+            .moveaxis(-3, -1)
+            .numpy()
+            if tuple(prob.shape) != tuple(m.shape[:2])
+            else m
+        )
+        for m in maps_viz
+    ]
+
     overlay = likelihood_overlay(prob.numpy(), maps_viz[0].mean(-1, keepdims=True))
 
     logl = lp_ij.numpy()
