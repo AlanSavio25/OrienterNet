@@ -2,6 +2,7 @@
 
 import torch
 import torch.nn as nn
+from torch.nn.functional import interpolate
 
 from .base import BaseModel
 from .feature_extractor import FeatureExtractor
@@ -11,6 +12,7 @@ class MapEncoder(BaseModel):
     default_conf = {
         "embedding_dim": "???",
         "output_dim": None,
+        "scale_factor": None,
         "num_classes": "???",
         "backbone": "???",
         "unary_prior": False,
@@ -58,9 +60,15 @@ class MapEncoder(BaseModel):
             features = self.encoder({"image": embeddings})["feature_maps"]
         else:
             features = [self.encoder(embeddings)]
+        if self.conf.scale_factor is not None:
+            features = [
+                interpolate(f, scale_factor=self.conf.scale_factor, mode="bilinear")
+                for f in features
+            ]
         pred = {}
         if self.conf.unary_prior:
             pred["log_prior"] = [f[:, -1] for f in features]
             features = [f[:, :-1] for f in features]
+
         pred["map_features"] = features
         return pred

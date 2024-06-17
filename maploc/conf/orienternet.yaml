@@ -16,6 +16,7 @@ model:
     embedding_dim: 16
     output_dim: ${..matching_dim}
     num_classes: ${data.num_classes}
+    scale_factor:
     backbone:
       encoder: vgg19
       pretrained: false
