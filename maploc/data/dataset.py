@@ -109,14 +109,15 @@ class MapLocDataset(torchdata.Dataset):
             error = (world_R_cam @ self.data["shifts"][idx][:2]).numpy()
         else:
             error = np.random.RandomState(seed).uniform(-1, 1, size=2)
-        xy_w_init += error * min(self.cfg.max_init_error)
 
         if self.cfg.return_multiscale:
+            xy_w_init += error * min(self.cfg.max_init_error)
             bbox_tile = [
                 BoundaryBox(xy_w_init - crop_size_meters, xy_w_init + crop_size_meters)
                 for crop_size_meters in self.cfg.crop_size_meters
             ]
         else:
+            xy_w_init += error * self.cfg.max_init_error
             bbox_tile = BoundaryBox(
                 xy_w_init - self.cfg.crop_size_meters,
                 xy_w_init + self.cfg.crop_size_meters,
