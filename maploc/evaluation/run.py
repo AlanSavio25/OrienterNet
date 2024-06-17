@@ -59,7 +59,7 @@ def evaluate_single_image(
     progress: bool = True,
     mask_index: Optional[Tuple[int]] = None,
     has_gps: bool = False,
-    **kwargs
+    **kwargs,
 ):
     ppm = model.model.conf.pixel_per_meter
     metrics = MetricCollection(model.model.metrics())
@@ -222,7 +222,6 @@ def evaluate_sequential(
 
 def select_images_from_log(log_paths):
 
-
     if len(log_paths) == 0:
         raise ValueError("At least one log path must be provided")
     elif len(log_paths) == 1:
@@ -240,10 +239,13 @@ def select_images_from_log(log_paths):
             logs[i] = list(zip(log_data["errors"]["xy_max_error"], log_data["names"]))
             logs[i] = [err for err, _ in sorted(logs[i], key=lambda x: x[1])]
 
-        diff = - np.array(logs[0]) + np.array(logs[len(log_paths)-1])
-        selected_images = [n for value, n in sorted(list(zip(diff, sorted_names)), key=lambda x: x[0])]
+        diff = -np.array(logs[0]) + np.array(logs[len(log_paths) - 1])
+        selected_images = [
+            n for value, n in sorted(list(zip(diff, sorted_names)), key=lambda x: x[0])
+        ]
 
     return selected_images[:20]
+
 
 def evaluate(
     experiment: str,
@@ -287,7 +289,9 @@ def evaluate(
     kwargs = {**kwargs, "callback": callback}
 
     if kwargs.get("select_images_from_logs"):
-        kwargs["selected_images"] = select_images_from_log(kwargs.get("select_images_from_logs"))
+        kwargs["selected_images"] = select_images_from_log(
+            kwargs.get("select_images_from_logs")
+        )
     seed_everything(dataset.cfg.seed)
     if sequential:
         dset, chunk2idx = dataset.sequence_dataset(split, **cfg.chunking)
