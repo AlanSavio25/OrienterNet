@@ -237,14 +237,32 @@ class OrienterNet(BaseModel):
 
         pred = {}
 
+        data_idx = next(
+            i
+            for i, canvas in enumerate(data["canvas"])
+            if canvas[0].ppm == self.conf.pixel_per_meter
+        )
+
+        keys = [
+            "map_mask",
+            "map_t_gps",
+            "accuracy_gps",
+            "semantic_map",
+            "tile_T_cam",
+            "map_T_cam",
+            "map_t_init",
+            "pixels_per_meter",
+        ]
+        for k in keys:
+            data[k] = data[k][:, data_idx]
+        data["canvas"] = data["canvas"][data_idx][0]
+
         # Encode aerial/semantic maps
         # note: these maps are in memory layout
         feature_maps = []
         if self.map_encoder is not None:
             assert "semantic_map" in data
-            pred["semantic_map"] = self.map_encoder(
-                {**data, "map": data["semantic_map"]}
-            )
+            pred["semantic_map"] = self.map_encoder({"map": data["semantic_map"]})
             feature_maps.append(pred["semantic_map"]["map_features"][0])
         if self.aerial_encoder is not None:
             assert "aerial_map" in data, "Aerial map not found in data"

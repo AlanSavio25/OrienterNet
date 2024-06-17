@@ -23,6 +23,7 @@ loading:
     batch_size: 1 # ${..train.batch_size}
     num_workers: 1 # ${.batch_size}
 # map data
+return_multiscale: False
 num_classes:
   areas: 7
   ways: 10
