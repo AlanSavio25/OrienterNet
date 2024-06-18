@@ -3,7 +3,7 @@
 import functools
 from itertools import islice
 from pathlib import Path
-from typing import Callable, Dict, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
@@ -18,7 +18,7 @@ from .. import EXPERIMENTS_PATH, logger
 from ..data.torch import collate, unbatch_to_device
 from ..models.metrics import AngleError, LateralLongitudinalError, Location2DError
 from ..models.sequential import GPSAligner, RigidAligner
-from ..models.voting import argmax_xyr, fuse_gps
+from ..models.voting import argmax_xyr, fuse_gps, log_softmax_spatial
 from ..module import GenericModule
 from ..utils.io import DATA_URL, download_file, read_json
 from .utils import write_dump
@@ -48,6 +48,74 @@ def resolve_checkpoint_path(experiment_or_path: str) -> Path:
     if not maybe_path.exists():
         raise FileNotFoundError(f"Could not find any checkpoint in {path}.")
     return maybe_path
+
+
+@torch.no_grad()
+def evaluate_single_image_chain(
+    dataloader: torch.utils.data.DataLoader,
+    models: List[GenericModule],
+    num: Optional[int] = None,
+    callback: Optional[Callable] = None,
+    progress: bool = True,
+    mask_index: Optional[Tuple[int]] = None,
+    has_gps: bool = False,
+    **kwargs,
+):
+
+    ppm = models[0].model.conf.pixel_per_meter
+    metrics = MetricCollection(models[0].model.metrics())
+    metrics = metrics.to(models[0].device)
+
+    names = []
+
+    for i, batch_ in enumerate(
+        islice(tqdm(dataloader, total=num, disable=not progress), num)
+    ):
+
+        preds = []
+        batches = []
+        if kwargs.get("selected_images"):
+            if batch_["name"][0] not in kwargs.get("selected_images"):
+                continue
+        for model in models:
+            batch = model.transfer_batch_to_device(batch_, model.device, i)
+            pred = model(batch)
+            preds.append(pred)
+            batches.append(batch)
+
+        scores = [pred["scores"] for pred in preds]
+        h = w = max([score.shape[-2] for score in scores])
+        scores = [
+            torch.nn.functional.interpolate(
+                score.moveaxis(-1, -3), size=(h, w), mode="bilinear"
+            ).moveaxis(-3, -1)
+            for score in scores
+        ]
+        log_probs = [log_softmax_spatial(score) for score in scores]
+        log_probs_chained = log_softmax_spatial(torch.stack(log_probs).sum(0))
+
+        pred = preds[0]
+        model = models[0]
+        batch = batches[0]
+
+        uvr_max = argmax_xyr(log_probs_chained)
+        ij_max = torch.flip(uvr_max[..., :2], dims=[-1])
+        yaw_max = 180 - uvr_max[..., -1]
+        map_T_max = Transform2D.from_degrees(yaw_max.unsqueeze(-1), ij_max)
+        pred["map_T_cam_max"] = map_T_max
+        pred["tile_T_cam_max"] = Transform2D.from_pixels(map_T_max, 1 / ppm)
+        pred["log_probs"] = log_probs_chained
+
+        names += batch["name"]
+
+        results = metrics(pred, batch)
+        if callback is not None:
+            callback(
+                i, model, unbatch_to_device(pred), unbatch_to_device(batch), results
+            )
+        del batches, preds, results
+
+    return metrics.cpu(), names
 
 
 @torch.no_grad()
@@ -221,10 +289,7 @@ def evaluate_sequential(
 
 
 def select_images_from_log(log_paths):
-<<<<<<< HEAD
     """Return list of images to plot"""
-=======
->>>>>>> linter
 
     if len(log_paths) == 0:
         raise ValueError("At least one log path must be provided")
@@ -259,10 +324,62 @@ def select_images_from_log(log_paths):
             if f <= 4
         ]
 
-        # diff = - np.array(logs[0]) + np.array(logs[len(log_paths)-1])
-        # selected_images = [n for value, n in sorted(list(zip(diff, sorted_names)), key=lambda x: x[0])]
-        return selected_images[:50]
+    return selected_images[:5]
 
+
+def evaluate_chain(
+    experiments: List[str],
+    cfgs: List[DictConfig],
+    dataset,
+    split: str,
+    output_dir: Optional[Path] = None,
+    callback: Optional[Callable] = None,
+    num_workers: int = 1,
+    viz_kwargs=None,
+    **kwargs,
+):
+
+    logger.info("Evaluating models %s", experiments)
+
+    models = []
+    for experiment, cfg in zip(experiments, cfgs):
+        checkpoint_path = resolve_checkpoint_path(experiment)
+        model = GenericModule.load_from_checkpoint(
+            checkpoint_path, cfg=cfg, find_best=not experiment.endswith(".ckpt")
+        )
+        model = model.eval()
+        if torch.cuda.is_available():
+            model = model.cuda()
+        models.append(model)
+
+    dataset.prepare_data()
+    dataset.setup()
+
+    plot_images = kwargs.get("plot_images")
+    if output_dir is not None:
+        output_dir.mkdir(exist_ok=True, parents=True)
+        if callback is None and plot_images:
+            callback = plot_example_single
+            callback = functools.partial(
+                callback, out_dir=output_dir, return_plots=True, **(viz_kwargs or {})
+            )
+    kwargs = {**kwargs, "callback": callback}
+
+    if kwargs.get("select_images_from_logs"):
+        kwargs["selected_images"] = select_images_from_log(
+            kwargs.get("select_images_from_logs")
+        )
+    seed_everything(dataset.cfg.seed)
+
+    loader = dataset.dataloader(split, shuffle=True, num_workers=num_workers)
+    metrics, names = evaluate_single_image_chain(loader, models, **kwargs)
+
+    results = metrics.compute()
+    logger.info("All results: %s", results)
+    if output_dir is not None and not plot_images:
+        write_dump(output_dir, experiments[0], cfg, results, metrics, names)
+        logger.info("Outputs have been written to %s.", output_dir)
+    return metrics
 
 
 def evaluate(

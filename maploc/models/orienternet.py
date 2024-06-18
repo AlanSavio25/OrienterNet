@@ -237,12 +237,8 @@ class OrienterNet(BaseModel):
 
         pred = {}
 
-        if len(data["pixels_per_meter"].shape) > 1:
-            data_idx = next(
-                i
-                for i, canvas in enumerate(data["canvas"])
-                if canvas[0].ppm == self.conf.pixel_per_meter
-            )
+        if isinstance(data["pixels_per_meter"], dict):
+            ppm = self.conf.pixel_per_meter
 
             keys = [
                 "map_mask",
@@ -253,10 +249,12 @@ class OrienterNet(BaseModel):
                 "map_T_cam",
                 "map_t_init",
                 "pixels_per_meter",
+                "canvas",
             ]
             for k in keys:
-                data[k] = data[k][:, data_idx]
-            data["canvas"] = data["canvas"][data_idx][0]
+                if k not in data:
+                    continue
+                data[k] = data[k][ppm]
 
         # Encode aerial/semantic maps
         # note: these maps are in memory layout

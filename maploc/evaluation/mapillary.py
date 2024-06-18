@@ -3,13 +3,14 @@
 import argparse
 from pathlib import Path
 from typing import Optional, Tuple
+from hydra import compose, initialize
 
 from omegaconf import DictConfig, OmegaConf
 
 from .. import logger
 from ..conf import data as conf_data_dir
 from ..data import MapillaryDataModule
-from .run import evaluate
+from .run import evaluate, evaluate_chain
 
 split_overrides = {
     "val": {
@@ -54,20 +55,42 @@ default_cfg_sequential = OmegaConf.create(
 def run(
     split: str,
     experiment: str,
+    cfg_path: Path = None,
     cfg: Optional[DictConfig] = None,
     sequential: bool = False,
     thresholds: Tuple[int] = (1, 3, 5),
     **kwargs,
 ):
-    cfg = cfg or {}
-    if isinstance(cfg, dict):
-        cfg = OmegaConf.create(cfg)
+
     default = default_cfg_sequential if sequential else default_cfg_single
     default = OmegaConf.merge(default, dict(data=split_overrides[split]))
-    cfg = OmegaConf.merge(default, cfg)
-    dataset = MapillaryDataModule(cfg.get("data", {}))
 
-    metrics = evaluate(experiment, cfg, dataset, split, sequential=sequential, **kwargs)
+    if cfg_path is not None:
+        cfgs = []
+        if isinstance(cfg, dict):
+            cfg = OmegaConf.create(cfg)
+        dataset = MapillaryDataModule(OmegaConf.merge(default, cfg).get("data", {}))
+        for conf_p in cfg_path:
+            conf = OmegaConf.load(conf_p)
+            OmegaConf.resolve(conf)
+            conf = OmegaConf.merge(default, conf)
+            conf = OmegaConf.merge(conf, cfg)
+            cfgs.append(conf)
+    else:
+        cfg = cfg or {}
+        if isinstance(cfg, dict):
+            cfg = OmegaConf.create(cfg)
+
+        cfg = OmegaConf.merge(default, cfg)
+        cfgs = [cfg]
+        dataset = MapillaryDataModule(cfg.get("data", {}))
+
+    if len(experiment) == 1:
+        metrics = evaluate(
+            experiment[0], cfgs[0], dataset, split, sequential=sequential, **kwargs
+        )
+    else:
+        metrics = evaluate_chain(experiment, cfgs, dataset, split, **kwargs)
 
     keys = [
         "xy_max_error",
@@ -92,19 +115,21 @@ def run(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--experiment", type=str, required=True)
+    parser.add_argument("--experiment", nargs="*", type=str, required=True)
     parser.add_argument("--split", type=str, default="val", choices=["val"])
     parser.add_argument("--sequential", action="store_true")
     parser.add_argument("--output_dir", type=Path)
     parser.add_argument("--num", type=int)
     parser.add_argument("--plot_images", action="store_true")
-    parser.add_argument("--select_images_from_logs", type=lambda args: args.split(","))
+    parser.add_argument("--select_images_from_logs", nargs="*", type=Path)
+    parser.add_argument("--cfg_path", nargs="*", type=Path)
     parser.add_argument("dotlist", nargs="*")
     args = parser.parse_args()
     cfg = OmegaConf.from_cli(args.dotlist)
     run(
         args.split,
         args.experiment,
+        args.cfg_path,
         cfg,
         args.sequential,
         output_dir=args.output_dir,

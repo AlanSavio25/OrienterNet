@@ -163,11 +163,14 @@ class MapLocDataset(torchdata.Dataset):
                     self.tile_managers[scene], bbox_tile
                 )
             ]
-            ppm = torch.stack([torch.tensor(c.ppm).float() for c in canvas])
-            raster = [c.raster for c in canvas]
-            raster = torch.stack(
-                [torch.from_numpy(np.ascontiguousarray(r)) for r in raster]
-            ).long()
+            ppm = {c.ppm: torch.tensor(c.ppm).float() for c in canvas}
+            # raster = [c.raster for c in canvas]
+            # raster = {torch.from_numpy(np.ascontiguousarray(r)).long() for r in raster]
+            raster = {
+                c.ppm: torch.from_numpy(np.ascontiguousarray(c.raster)).long()
+                for c in canvas
+            }
+            # TODO: dict aerials
             if hasattr(canvas[0], "aerial"):
                 aerial = [c.aerial for c in canvas]
                 aerial = torch.stack(
@@ -191,12 +194,13 @@ class MapLocDataset(torchdata.Dataset):
         _, cam_R_gcam = decompose_cam_into_gcam(world_T_cam)
 
         if self.cfg.return_multiscale:
-            world_T_tile = torch.stack(
-                [Transform2D.from_Rt(torch.eye(2), c.bbox.min_) for c in canvas]
-            )
-            tile_T_cam = torch.stack(
-                [(w_T_t.inv() @ world_T_cam2d).float() for w_T_t in world_T_tile]
-            )
+            world_T_tile = {
+                c.ppm: Transform2D.from_Rt(torch.eye(2), c.bbox.min_) for c in canvas
+            }
+            tile_T_cam = {
+                k: (w_T_t.inv() @ world_T_cam2d).float()
+                for k, w_T_t in world_T_tile.items()
+            }
         else:
             world_T_tile = Transform2D.from_Rt(torch.eye(2), canvas.bbox.min_)
             tile_T_cam = (world_T_tile.inv() @ world_T_cam2d).float()
@@ -210,12 +214,10 @@ class MapLocDataset(torchdata.Dataset):
                     image, raster, tile_T_cam, cam_R_gcam, canvas.ppm
                 )
         if self.cfg.return_multiscale:
-            map_T_cam = torch.stack(
-                [
-                    Transform2D.to_pixels(t_T_c, 1 / c.ppm)
-                    for (t_T_c, c) in zip(tile_T_cam, canvas)
-                ]
-            )
+            map_T_cam = {
+                c.ppm: Transform2D.to_pixels(t_T_c, 1 / c.ppm)
+                for (t_T_c, c) in zip(tile_T_cam.values(), canvas)
+            }
         else:
             map_T_cam = Transform2D.to_pixels(tile_T_cam, 1 / canvas.ppm)
         # map_T_cam will be deprecated, tile_T_cam is sufficient.
@@ -229,28 +231,29 @@ class MapLocDataset(torchdata.Dataset):
 
         # Spatial to memory layout
         if self.cfg.return_multiscale:
-            raster = torch.stack([torch.rot90(r, -1, dims=(-2, -1)) for r in raster])
+            # raster = {k:torch.rot90(r, -1, dims=(-2, -1)) for k,r in raster.items()}
+            for k, r in raster.items():
+                raster[k] = torch.rot90(r, -1, dims=(-2, -1))
             if hasattr(canvas, "aerial"):
                 aerial = torch.stack(
                     [torch.rot90(a, -1, dims=(-2, -1)) for a in aerial]
                 )
                 data["aerial_map"] = aerial
 
-            world_t_init = torch.stack(
-                [torch.from_numpy(bbox_tile_.center) for bbox_tile_ in bbox_tile]
-            )
-            tile_t_init = torch.stack(
-                [
-                    (w_t_init - w_T_t.t).float()
-                    for (w_t_init, w_T_t) in zip(world_t_init, world_T_tile)
-                ]
-            )
-            map_t_init = torch.stack(
-                [
-                    Transform2D.to_pixels(t_t_init, 1 / c.ppm)
-                    for (t_t_init, c) in zip(tile_t_init, canvas)
-                ]
-            )
+            world_t_init = {
+                c.ppm: torch.from_numpy(bbox_tile_.center)
+                for (bbox_tile_, c) in zip(bbox_tile, canvas)
+            }
+            tile_t_init = {
+                c.ppm: (w_t_init - w_T_t.t).float()
+                for (w_t_init, w_T_t, c) in zip(
+                    world_t_init.values(), world_T_tile.values(), canvas
+                )
+            }
+            map_t_init = {
+                c.ppm: Transform2D.to_pixels(t_t_init, 1 / c.ppm)
+                for (t_t_init, c) in zip(tile_t_init.values(), canvas)
+            }
         else:
             raster = torch.rot90(raster, -1, dims=(-2, -1))
             if hasattr(canvas, "aerial"):
@@ -264,17 +267,16 @@ class MapLocDataset(torchdata.Dataset):
         # Create the mask for prior location
         if self.cfg.add_map_mask:
             if self.cfg.return_multiscale:
-                map_mask = torch.stack(
-                    [
-                        torch.from_numpy(self.create_map_mask(c, init_error, pad))
-                        for (c, init_error, pad) in zip(
-                            canvas, self.cfg.max_init_error, self.cfg.mask_pad
-                        )
-                    ]
-                )
-                data["map_mask"] = torch.stack(
-                    [torch.rot90(mask, -1, dims=(-2, -1)) for mask in map_mask]
-                )
+                map_mask = {
+                    c.ppm: torch.from_numpy(self.create_map_mask(c, init_error, pad))
+                    for (c, init_error, pad) in zip(
+                        canvas, self.cfg.max_init_error, self.cfg.mask_pad
+                    )
+                }
+                data["map_mask"] = {
+                    c.ppm: torch.rot90(mask, -1, dims=(-2, -1))
+                    for (mask, c) in zip(map_mask.values(), canvas)
+                }
             else:
                 map_mask = torch.from_numpy(
                     self.create_map_mask(
@@ -300,22 +302,17 @@ class MapLocDataset(torchdata.Dataset):
             if self.cfg.return_multiscale:
                 world_t_gps = self.tile_managers[scene][0].projection.project(gps)
                 world_t_gps = torch.from_numpy(world_t_gps)
-                tile_t_gps = [(world_t_gps - w_T_t.t).float() for w_T_t in world_T_tile]
-                # TODO
-                raise NotImplementedError
-                data["tile_t_gps"] = None
-                data["map_t_gps"] = torch.stack(
-                    [
-                        Transform2D.to_pixels(t_t_gps, 1 / c.ppm)
-                        for (t_t_gps, c) in zip(tile_t_gps, canvas)
-                    ]
-                )
-                data["accuracy_gps"] = torch.stack(
-                    [
-                        torch.tensor(min(self.cfg.accuracy_gps, crop_size_meters))
-                        for crop_size_meters in self.cfg.crop_size_meters
-                    ]
-                )
+                tile_t_gps = [
+                    (world_t_gps - w_T_t.t).float() for w_T_t in world_T_tile.values()
+                ]
+                data["map_t_gps"] = {
+                    c.ppm: Transform2D.to_pixels(t_t_gps, 1 / c.ppm)
+                    for (t_t_gps, c) in zip(tile_t_gps, canvas)
+                }
+                data["accuracy_gps"] = {
+                    c.ppm: torch.tensor(min(self.cfg.accuracy_gps, crop_size_meters))
+                    for (crop_size_meters, c) in zip(self.cfg.crop_size_meters, canvas)
+                }
 
             else:
                 world_t_gps = self.tile_managers[scene].projection.project(gps)
@@ -329,22 +326,25 @@ class MapLocDataset(torchdata.Dataset):
         if "chunk_index" in self.data:
             data["chunk_id"] = (scene, seq, self.data["chunk_index"][idx])
 
+        if self.cfg.return_multiscale:
+            canvas = {c.ppm: c for c in canvas}
+
         return {
             **data,
-            # Image - all single per idx
+            # Image
             "image": image,
             "valid": valid,
             "camera": cam,
-            # GT Pose - all single per idx
+            # GT Pose
             "world_T_cam": world_T_cam.t,
             "cam_R_gcam": cam_R_gcam,
-            # Map(s) - all multiple per idx
-            "semantic_map": raster,  # tensor, simply unsqueeze
-            "canvas": canvas,  # This is a canvas object not a tensor
-            "tile_T_cam": tile_T_cam,  # tensor wrapper
-            "map_T_cam": map_T_cam,  # tensor wrapper
-            "map_t_init": map_t_init,  # tensor
-            "pixels_per_meter": np.array(ppm),
+            # Map(s)
+            "semantic_map": raster,
+            "canvas": canvas,
+            "tile_T_cam": tile_T_cam,
+            "map_T_cam": map_T_cam,
+            "map_t_init": map_t_init,
+            "pixels_per_meter": ppm,
         }
 
     def process_image(self, image, cam, seed, cam_R_gcam, rectify=True):
