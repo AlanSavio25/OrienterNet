@@ -59,7 +59,7 @@ def evaluate_single_image(
     progress: bool = True,
     mask_index: Optional[Tuple[int]] = None,
     has_gps: bool = False,
-    **kwargs
+    **kwargs,
 ):
     ppm = model.model.conf.pixel_per_meter
     metrics = MetricCollection(model.model.metrics())
@@ -221,12 +221,20 @@ def evaluate_sequential(
 
 
 def select_images_from_log(log_paths):
-
+    """Return list of images to plot"""
 
     if len(log_paths) == 0:
         raise ValueError("At least one log path must be provided")
     elif len(log_paths) == 1:
-        raise NotImplementedError
+        log_data = read_json(Path(log_paths[0]))
+        # best or worst or both with median?
+        logs = list(zip(log_data["errors"]["xy_max_error"], log_data["names"]))
+
+        logs = [name for _, name in sorted(logs, key=lambda x: x[0])]
+
+        # logs = [name for (err, name) in logs if 4.0 < err < 9.0]
+        selected_images = logs[:15] + logs[-30:]
+
     if len(log_paths) > 1:
 
         logs = {}
@@ -240,10 +248,20 @@ def select_images_from_log(log_paths):
             logs[i] = list(zip(log_data["errors"]["xy_max_error"], log_data["names"]))
             logs[i] = [err for err, _ in sorted(logs[i], key=lambda x: x[1])]
 
-        diff = - np.array(logs[0]) + np.array(logs[len(log_paths)-1])
-        selected_images = [n for value, n in sorted(list(zip(diff, sorted_names)), key=lambda x: x[0])]
+        # selected_images = [n for (n, f, c) in list(zip(sorted_names, logs[0], logs[len(log_paths)-1])) if c < 5 and f > 12]
 
-    return selected_images[:20]
+        # selected_images = [n for (n, f, c, C) in list(zip(sorted_names, logs[0], logs[1], logs[2])) if (f > 0.5 and c <= 0.5) or (f > 1 and c <= 1) or (f > 2 and c <= 2)]
+        selected_images = [
+            n
+            for (n, f, c, C) in list(zip(sorted_names, logs[0], logs[1], logs[2]))
+            if f <= 4
+        ]
+
+        # diff = - np.array(logs[0]) + np.array(logs[len(log_paths)-1])
+        # selected_images = [n for value, n in sorted(list(zip(diff, sorted_names)), key=lambda x: x[0])]
+
+    return selected_images[:50]
+
 
 def evaluate(
     experiment: str,
@@ -287,7 +305,9 @@ def evaluate(
     kwargs = {**kwargs, "callback": callback}
 
     if kwargs.get("select_images_from_logs"):
-        kwargs["selected_images"] = select_images_from_log(kwargs.get("select_images_from_logs"))
+        kwargs["selected_images"] = select_images_from_log(
+            kwargs.get("select_images_from_logs")
+        )
     seed_everything(dataset.cfg.seed)
     if sequential:
         dset, chunk2idx = dataset.sequence_dataset(split, **cfg.chunking)
