@@ -381,6 +381,59 @@ def evaluate_chain(
         logger.info("Outputs have been written to %s.", output_dir)
     return metrics
 
+def evaluate_chain(
+    experiments: List[str],
+    cfgs: List[DictConfig],
+    dataset,
+    split: str,
+    output_dir: Optional[Path] = None,
+    callback: Optional[Callable] = None,
+    num_workers: int = 1,
+    viz_kwargs=None,
+    **kwargs,
+):
+
+    logger.info("Evaluating models %s", experiments)
+
+    models = []
+    for experiment, cfg in zip(experiments, cfgs):
+        checkpoint_path = resolve_checkpoint_path(experiment)
+        model = GenericModule.load_from_checkpoint(
+            checkpoint_path, cfg=cfg, find_best=not experiment.endswith(".ckpt")
+        )
+        model = model.eval()
+        if torch.cuda.is_available():
+            model = model.cuda()
+        models.append(model)
+
+    dataset.prepare_data()
+    dataset.setup()
+
+    plot_images = kwargs.get("plot_images")
+    if output_dir is not None:
+        output_dir.mkdir(exist_ok=True, parents=True)
+        if callback is None and plot_images:
+            callback = plot_example_single
+            callback = functools.partial(
+                callback, out_dir=output_dir, return_plots=True, **(viz_kwargs or {})
+            )
+    kwargs = {**kwargs, "callback": callback}
+
+    if kwargs.get("select_images_from_logs"):
+        kwargs["selected_images"] = select_images_from_log(
+            kwargs.get("select_images_from_logs")
+        )
+    seed_everything(dataset.cfg.seed)
+
+    loader = dataset.dataloader(split, shuffle=True, num_workers=num_workers)
+    metrics, names = evaluate_single_image_chain(loader, models, **kwargs)
+
+    results = metrics.compute()
+    logger.info("All results: %s", results)
+    if output_dir is not None and not plot_images:
+        write_dump(output_dir, experiments[0], cfg, results, metrics, names)
+        logger.info("Outputs have been written to %s.", output_dir)
+    return metrics
 
 
 def evaluate(
