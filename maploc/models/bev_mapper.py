@@ -380,14 +380,14 @@ class BEVMapper(BaseModel):
                     f_bev.moveaxis(-1, -3),
                     size=(h, w),
                     mode="bilinear",
-                    align_corners=True,
+                    align_corners=False,
                 ).moveaxis(-3, -1)
                 nan_mask = torch.where(valid_bev, 0, torch.nan)
                 nan_mask = torch.nn.functional.interpolate(
                     nan_mask.unsqueeze(1),
                     size=(h, w),
                     mode="bilinear",
-                    align_corners=True,
+                    align_corners=False,
                 ).squeeze(1)
                 valid_bev = ~torch.isnan(nan_mask)
 
