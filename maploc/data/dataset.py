@@ -211,6 +211,7 @@ class MapLocDataset(torchdata.Dataset):
             world_t_gps = self.tile_managers[scene].projection.project(gps)
             world_t_gps = torch.from_numpy(world_t_gps)
             tile_t_gps = (world_t_gps - world_T_tile.t).float()
+            data["tile_t_gps"] = tile_t_gps
             data["map_t_gps"] = Transform2D.to_pixels(tile_t_gps, 1 / canvas.ppm)
             data["accuracy_gps"] = torch.tensor(
                 min(self.cfg.accuracy_gps, self.cfg.crop_size_meters)
