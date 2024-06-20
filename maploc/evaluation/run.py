@@ -318,10 +318,13 @@ def select_images_from_log(log_paths):
 
         # selected_images = [n for (n, f, c) in list(zip(sorted_names, logs[0], logs[len(log_paths)-1])) if c < 5 and f > 12]
         # selected_images = [n for (n, f, c, C) in list(zip(sorted_names, logs[0], logs[1], logs[2])) if (f > 0.5 and c <= 0.5) or (f > 1 and c <= 1) or (f > 2 and c <= 2)]
+        # selected_images = [
+        #     n
+        #     for (n, f, c, C) in list(zip(sorted_names, logs[0], logs[1], logs[2]))
+        #     if f <= 4
+        diff = -np.array(logs[0]) + np.array(logs[len(log_paths) - 1])
         selected_images = [
-            n
-            for (n, f, c, C) in list(zip(sorted_names, logs[0], logs[1], logs[2]))
-            if f <= 4
+            n for value, n in sorted(list(zip(diff, sorted_names)), key=lambda x: x[0])
         ]
 
     return selected_images[:5]
