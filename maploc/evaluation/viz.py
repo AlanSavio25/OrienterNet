@@ -8,6 +8,8 @@ import torch
 from PIL import Image
 from torchvision.transforms.functional import to_tensor
 
+from maploc.utils.wrappers import Transform2D
+
 from ..osm.viz import Colormap, plot_nodes
 from ..utils.io import write_torch_image
 from ..utils.viz_2d import features_to_RGB, plot_images, save_plot
@@ -41,12 +43,22 @@ def plot_example_single(
     # m_r_c (yaw): only rotation. East-facing, counter-clockwise rotation
     plots = []
 
-    scene, name, map_T_cam_gt = (data[k] for k in ("scene", "name", "map_T_cam"))
+    scene, name, tile_T_cam_gt = (data[k] for k in ("scene", "name", "tile_T_cam"))
+
+    map_T_cam_gt = Transform2D.to_pixels(
+        tile_T_cam_gt,
+        1
+        / (
+            model.model.conf.pixel_per_meter
+            if model is not None
+            else data["pixels_per_meter"]
+        ),
+    )
 
     m_t_c_gt = map_T_cam_gt.t.squeeze(0)  # ij_gt
     yaw_gt = map_T_cam_gt.angle.squeeze(0)  # m_r_c_gt
 
-    m_t_gps = data.get("map_t_gps").squeeze(0)
+    tile_t_gps = data.get("tile_t_gps").squeeze(0)
     if show_fused and "ij_fused" in pred:
         m_t_c_pred = pred["ij_fused"]
         yaw_p = pred.get("yaw_fused")
@@ -179,7 +191,16 @@ def plot_example_single(
         bev = np.swapaxes(bev, 0, 1)
         plot_bev(bev, uv=m_t_c_pred, yaw=yaw_p, zorder=10, ax=axes[1])
 
-    if show_gps and m_t_gps is not None:
+    if show_gps and tile_t_gps is not None:
+        m_t_gps = Transform2D.to_pixels(
+            tile_t_gps,
+            1
+            / (
+                model.model.conf.pixel_per_meter
+                if model is not None
+                else data["pixels_per_meter"]
+            ),
+        )
         plot_pose(
             [1] + ([2] if len(maps_viz) > 1 else []), m_t_gps, c="blue", refactored=True
         )
