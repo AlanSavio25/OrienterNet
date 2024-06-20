@@ -339,7 +339,7 @@ class OrienterNet(BaseModel):
             yaw_avg = 180 - uvr_avg[..., 2][..., None]
             map_T_cam_max = Transform2D.from_degrees(yaw_max, ij_max)
             map_T_cam_avg = Transform2D.from_degrees(yaw_avg, ij_avg)
-            resolution = 1 / data["pixels_per_meter"][..., None]
+            resolution = 1 / self.conf.pixel_per_meter
             tile_T_cam_max = Transform2D.from_pixels(map_T_cam_max, resolution)
             tile_T_cam_avg = Transform2D.from_pixels(map_T_cam_avg, resolution)
 
@@ -385,7 +385,7 @@ class OrienterNet(BaseModel):
                 )
 
             map_T_cam_max = Transform2D(map_T_cam_max)
-            resolution = 1 / data["pixels_per_meter"][..., None]
+            resolution = 1 / self.conf.pixel_per_meter
             tile_T_cam_max = Transform2D.from_pixels(map_T_cam_max, resolution)
 
             # Dummy

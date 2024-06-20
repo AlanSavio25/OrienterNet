@@ -46,13 +46,7 @@ def plot_example_single(
     scene, name, tile_T_cam_gt = (data[k] for k in ("scene", "name", "tile_T_cam"))
 
     map_T_cam_gt = Transform2D.to_pixels(
-        tile_T_cam_gt,
-        1
-        / (
-            model.model.conf.pixel_per_meter
-            if model is not None
-            else data["pixels_per_meter"]
-        ),
+        tile_T_cam_gt, 1 / model.model.conf.pixel_per_meter
     )
 
     m_t_c_gt = map_T_cam_gt.t.squeeze(0)  # ij_gt
@@ -194,12 +188,7 @@ def plot_example_single(
     if show_gps and tile_t_gps is not None:
         m_t_gps = Transform2D.to_pixels(
             tile_t_gps,
-            1
-            / (
-                model.model.conf.pixel_per_meter
-                if model is not None
-                else data["pixels_per_meter"]
-            ),
+            1 / model.model.conf.pixel_per_meter,
         )
         plot_pose(
             [1] + ([2] if len(maps_viz) > 1 else []), m_t_gps, c="blue", refactored=True
@@ -330,10 +319,7 @@ def plot_example_single(
         write_torch_image(p.format("image").replace("pdf", "jpg"), image.numpy())
 
     scales_scores = pred["pixel_scales"]  # [..., 2:-7]
-    if model is not None:
-        max_depth = model.model.conf.bev_mapper.z_max
-    else:
-        max_depth = 128.0
+    max_depth = model.model.conf.bev_mapper.z_max
     if max_depth == 256.0:
         scales_scores[..., -10:] = 0  # 256m
     elif max_depth == 128.0:
@@ -342,7 +328,7 @@ def plot_example_single(
         scales_scores[..., :2] = scales_scores[..., -10:] = 0  # 64m
     elif max_depth == 32.0:
         scales_scores[..., :6] = scales_scores[..., -7:] = 0  # 32m
-    max_scoring_scale = scales_scores.max(-1).indices  # scale with highest score
+    # max_scoring_scale = scales_scores.max(-1).indices  # scale with highest score
 
     log_prob = torch.nn.functional.log_softmax(scales_scores, dim=-1)
     scales_exp = torch.sum(log_prob.exp() * torch.arange(scales_scores.shape[-1]), -1)
