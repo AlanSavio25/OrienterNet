@@ -419,10 +419,10 @@ class OrienterNet(BaseModel):
     def loss(self, pred, data):
 
         # Revert refactored outputs to original. TODO: update sample_xyr
-        ij_gt = data["map_T_cam"].t
+        ij_gt = Transform2D.to_pixels(data["tile_T_cam"], self.conf.pixel_per_meter).t
         uv_gt = ij_gt.clone()
         uv_gt = torch.flip(ij_gt, dims=[-1])
-        yaw_gt = (180 - data["map_T_cam"].angle.squeeze(-1)) % 360
+        yaw_gt = (180 - data["tile_T_cam"].angle.squeeze(-1)) % 360
         log_probs = pred["log_probs"]
 
         map_mask = data.get("map_mask")
@@ -443,6 +443,9 @@ class OrienterNet(BaseModel):
         loss = {"total": nll, "nll": nll}
         if self.training and self.conf.add_temperature:
             loss["temperature"] = self.temperature.expand(len(nll))
+
+        assert not torch.all(torch.isfinite(loss["total"]))
+
         return loss
 
     def metrics(self):
