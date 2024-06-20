@@ -1,9 +1,9 @@
 #!/bin/bash
-#SBATCH --job-name=9_16_snap_coarse_128m_2mpp_cont
-#SBATCH --output=sbatch_outputs/9_16_snap_coarse_128m_2mpp_cont.out
+#SBATCH --job-name=9_18_snap_coarse_128m_2mpp_cont
+#SBATCH --output=sbatch_outputs/9_18_snap_coarse_128m_2mpp_cont.out
 #SBATCH --time=24:00:00
-#SBATCH --ntasks-per-node=12
-#SBATCH --mem-per-cpu=12G
+#SBATCH --ntasks-per-node=8
+#SBATCH --mem-per-cpu=8G
 #SBATCH --account=ls_polle
 #SBATCH --gpus=nvidia_geforce_rtx_4090:1
 #SBATCH --gres=gpumem:24G
@@ -394,18 +394,18 @@
 #         training.trainer.max_steps=320000
 
 # # 9_16 SNAP coarse - 4x - 2mpp
-EXPERIMENT_NAME="9_16_snap_coarse_128m_2mpp"
-python -m maploc.train experiment.name=$EXPERIMENT_NAME \
-        data.crop_size_meters=256 \
-        data.max_init_error=192 \
-        data.pixel_per_meter=0.5 \
-        data.tiles_filename=tiles_2mpp.pkl \
-        model.bev_mapper.z_max=128.0 \
-        model.bev_mapper.x_max=128.0 \
-        model.bev_mapper.grid_cell_size=1 \
-        model.bev_mapper.image_encoder.backbone.encoder=resnet18 \
-        training.lr=5e-5 \
-        training.trainer.max_steps=320000
+# EXPERIMENT_NAME="9_16_snap_coarse_128m_2mpp"
+# python -m maploc.train experiment.name=$EXPERIMENT_NAME \
+#         data.crop_size_meters=256 \
+#         data.max_init_error=192 \
+#         data.pixel_per_meter=0.5 \
+#         data.tiles_filename=tiles_2mpp.pkl \
+#         model.bev_mapper.z_max=128.0 \
+#         model.bev_mapper.x_max=128.0 \
+#         model.bev_mapper.grid_cell_size=1 \
+#         model.bev_mapper.image_encoder.backbone.encoder=resnet18 \
+#         training.lr=5e-5 \
+#         training.trainer.max_steps=320000
 
 
 # MAP DOWNSAMPLE
@@ -423,21 +423,20 @@ python -m maploc.train experiment.name=$EXPERIMENT_NAME \
 #         training.lr=5e-5 \
 #         training.trainer.max_steps=320000
 
-# 9_18 SNAP coarse - 4x - 2mpp
-# EXPERIMENT_NAME="9_18_snap_coarse_128m_2mpp"
-# python -m maploc.train experiment.name=$EXPERIMENT_NAME \
-#         data.crop_size_meters=256 \
-#         data.max_init_error=192 \
-#         data.pixel_per_meter=1 \
-#         model.pixel_per_meter=0.5 \
-#         data.tiles_filename=tiles_1mpp.pkl \
-#         model.map_encoder.backbone.output_scales=[1] \
-#         model.bev_mapper.z_max=128.0 \
-#         model.bev_mapper.x_max=128.0 \
-#         model.bev_mapper.image_encoder.backbone.encoder=resnet18 \
-#         training.lr=5e-5 \
-#         training.trainer.max_steps=320000
-
-        # model.map_encoder.scale_factor=0.5 \
+# 9_{18} SNAP coarse - 4x - 2mpp
+EXPERIMENT_NAME="9_18_snap_coarse_128m_2mpp"
+python -m maploc.train experiment.name=$EXPERIMENT_NAME \
+        data.crop_size_meters=256 \
+        data.max_init_error=192 \
+        data.mask_pad=6 \
+        data.pixel_per_meter=1 \
+        model.pixel_per_meter=0.5 \
+        data.tiles_filename=tiles_1mpp.pkl \
+        model.map_encoder.backbone.output_scales=[1] \
+        model.bev_mapper.z_max=128.0 \
+        model.bev_mapper.x_max=128.0 \
+        model.bev_mapper.image_encoder.backbone.encoder=resnet18 \
+        training.lr=5e-5 \
+        training.trainer.max_steps=320000
 
 exit 0
