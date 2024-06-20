@@ -71,7 +71,7 @@ class GenericModule(pl.LightningModule):
             results = {k[4:]: results[k] for k in results}
             plots = plot_example_single(
                 0,
-                None,
+                self,
                 pred,
                 batch,
                 results,
