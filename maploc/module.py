@@ -1,9 +1,11 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates.
 
 from pathlib import Path
+from typing import Any
 
 import pytorch_lightning as pl
 import torch
+import numpy as np
 from lightning_fabric.utilities.apply_func import move_data_to_device
 from lightning_utilities.core.apply_func import apply_to_collection
 from omegaconf import DictConfig, OmegaConf, open_dict
@@ -162,3 +164,37 @@ class GenericModule(pl.LightningModule):
             cfg = OmegaConf.merge(cfg_ckpt, cfg)
 
         return pl.core.saving._load_state(cls, checkpoint, strict=strict, cfg=cfg)
+
+    def transfer_batch_to_device(self, batch, device, dataloader_idx) -> Any:
+
+        if isinstance(
+            batch["pixels_per_meter"], dict
+        ):  # TODO: this needs to be something else
+            if self.training:
+                scale_idx = int(
+                    np.random.choice(np.arange(len(self.cfg.model.bev_mapper.z_max)))
+                )
+            else:
+                scale_idx = 1  # Fixed for validation
+            z_max = self.cfg.model.bev_mapper.z_max[scale_idx]
+            batch["scale_idx"] = torch.tensor(scale_idx).unsqueeze(0)
+            keys = [
+                "map_mask",
+                "map_t_gps",
+                "tile_t_gps",
+                "accuracy_gps",
+                "semantic_map",
+                "tile_T_cam",
+                "map_T_cam",
+                "map_t_init",
+                "pixels_per_meter",
+                "canvas",
+                "z_max",
+                "bev_ppm",
+            ]
+            for k in keys:
+                if k not in batch:
+                    continue
+                batch[k] = batch[k][z_max]
+
+        return super().transfer_batch_to_device(batch, device, dataloader_idx)

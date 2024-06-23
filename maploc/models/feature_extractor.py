@@ -219,7 +219,7 @@ class FeatureExtractor(BaseModel):
             pre_features = skip_features
 
         out_features = []
-        for adapt, i in zip(self.adaptation, self.conf.output_scales):
+        for adapt, i in zip(self.adaptation, [self.conf.output_scales[data["scale_idx"][0].item()]]):
             out_features.append(adapt(pre_features[i]))
         pred = {"feature_maps": out_features, "skip_features": skip_features}
         return pred

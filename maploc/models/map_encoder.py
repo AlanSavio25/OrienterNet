@@ -57,12 +57,14 @@ class MapEncoder(BaseModel):
         ]
         embeddings = torch.cat(embeddings, dim=-1).permute(0, 3, 1, 2)
         if isinstance(self.encoder, BaseModel):
-            features = self.encoder({"image": embeddings})["feature_maps"]
+            features = self.encoder({"image": embeddings, "scale_idx": data["scale_idx"]})["feature_maps"]
         else:
             features = [self.encoder(embeddings)]
-        if self.conf.scale_factor is not None:
+
+        scale_factor = self.conf.scale_factor[data["scale_idx"].item()]
+        if scale_factor not in (None, 1):
             features = [
-                interpolate(f, scale_factor=self.conf.scale_factor, mode="bilinear")
+                interpolate(f, scale_factor=scale_factor, mode="bilinear")
                 for f in features
             ]
         pred = {}

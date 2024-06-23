@@ -23,7 +23,12 @@ loading:
     batch_size: 1 # ${..train.batch_size}
     num_workers: 1 # ${.batch_size}
 # map data
-return_multiscale: False
+return_multiscale: false
+z_max: ${model.bev_mapper.z_max}
+bev_ppm: ${model.bev_mapper.pixel_per_meter}
+#   - 32.0
+#   - 64.0
+#   - 128.0
 num_classes:
   areas: 7
   ways: 10

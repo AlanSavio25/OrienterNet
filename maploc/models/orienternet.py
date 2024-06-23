@@ -92,7 +92,9 @@ class OrienterNet(BaseModel):
             temperature = torch.nn.Parameter(torch.tensor(0.0))
             self.register_parameter("temperature", temperature)
 
-    def exhaustive_voting(self, f_bev, f_map, valid_bev, confidence_bev=None):
+    def exhaustive_voting(
+        self, template_sampler, f_bev, f_map, valid_bev, confidence_bev=None
+    ):
         if self.conf.normalize_features or self.conf.use_map_cutout:
             f_bev = normalize(f_bev, dim=1)
             f_map = normalize(f_map, dim=1)
@@ -101,7 +103,7 @@ class OrienterNet(BaseModel):
         if confidence_bev is not None:
             f_bev = f_bev * confidence_bev.unsqueeze(1)
         f_bev = f_bev.masked_fill(~valid_bev.unsqueeze(1), 0.0)
-        templates = self.bev_mapper.template_sampler(f_bev)
+        templates = template_sampler(f_bev)
         with torch.autocast("cuda", enabled=False):
             scores = conv2d_fft_batchwise(
                 f_map.float(),
@@ -113,9 +115,7 @@ class OrienterNet(BaseModel):
 
         # Reweight the different rotations based on the number of valid pixels in each
         # template. Axis-aligned rotation have the maximum number of valid pixels.
-        valid_templates = self.bev_mapper.template_sampler(valid_bev.float()[None]) > (
-            1 - 1e-4
-        )
+        valid_templates = template_sampler(valid_bev.float()[None]) > (1 - 1e-4)
         num_valid = valid_templates.float().sum((-3, -2, -1))
         scores = scores / num_valid[..., None, None]
         return scores
@@ -237,31 +237,14 @@ class OrienterNet(BaseModel):
 
         pred = {}
 
-        if isinstance(data["pixels_per_meter"], dict):
-            ppm = self.conf.pixel_per_meter
-
-            keys = [
-                "map_mask",
-                "map_t_gps",
-                "accuracy_gps",
-                "semantic_map",
-                "tile_T_cam",
-                "map_T_cam",
-                "map_t_init",
-                "pixels_per_meter",
-                "canvas",
-            ]
-            for k in keys:
-                if k not in data:
-                    continue
-                data[k] = data[k][ppm]
-
         # Encode aerial/semantic maps
         # note: these maps are in memory layout
         feature_maps = []
         if self.map_encoder is not None:
             assert "semantic_map" in data
-            pred["semantic_map"] = self.map_encoder({"map": data["semantic_map"]})
+            pred["semantic_map"] = self.map_encoder(
+                {"map": data["semantic_map"], "scale_idx": data["scale_idx"]}
+            )
             feature_maps.append(pred["semantic_map"]["map_features"][0])
         if self.aerial_encoder is not None:
             assert "aerial_map" in data, "Aerial map not found in data"
@@ -331,7 +314,13 @@ class OrienterNet(BaseModel):
                 )
             valid_bev = torch.rot90(valid_bev, 1, dims=(-2, -1))
 
-            scores = self.exhaustive_voting(f_bev, f_map, valid_bev, confidence_bev)
+            template_sampler = self.bev_mapper.template_sampler[
+                str(int(data["z_max"][0].item()))
+            ]
+            # template_sampler = self.bev_mapper.template_sampler
+            scores = self.exhaustive_voting(
+                template_sampler, f_bev, f_map, valid_bev, confidence_bev
+            )
             scores = scores.moveaxis(1, -1)  # B,H,W,N
 
             if (
@@ -356,7 +345,7 @@ class OrienterNet(BaseModel):
             yaw_avg = 180 - uvr_avg[..., 2][..., None]
             map_T_cam_max = Transform2D.from_degrees(yaw_max, ij_max)
             map_T_cam_avg = Transform2D.from_degrees(yaw_avg, ij_avg)
-            resolution = 1 / self.conf.pixel_per_meter
+            resolution = 1 / data["bev_ppm"].float()  # self.conf.pixel_per_meter
             tile_T_cam_max = Transform2D.from_pixels(map_T_cam_max, resolution)
             tile_T_cam_avg = Transform2D.from_pixels(map_T_cam_avg, resolution)
 
@@ -437,7 +426,7 @@ class OrienterNet(BaseModel):
 
         # Revert refactored outputs to original. TODO: update sample_xyr
         ij_gt = Transform2D.to_pixels(
-            data["tile_T_cam"], 1 / self.conf.pixel_per_meter
+            data["tile_T_cam"], 1 / data["bev_ppm"].float()  # self.conf.pixel_per_meter
         ).t
         uv_gt = ij_gt.clone()
         uv_gt = torch.flip(ij_gt, dims=[-1])

@@ -2,6 +2,7 @@ import functools
 from typing import Tuple
 
 import torch
+import numpy as np
 
 from maploc.models.mlp import MLP
 from maploc.utils import grids
@@ -179,19 +180,38 @@ class BEVMapper(BaseModel):
         Encoder = get_model(conf.image_encoder.get("name", "feature_extractor_v2"))
         self.image_encoder = Encoder(conf.image_encoder.backbone)
         ppm = conf.pixel_per_meter
-        self.bev_ij_pts = None  # TODO: get rid of this
+        z_max = conf.z_max
+        if isinstance(z_max, (float, int)):
+            z_max = [z_max]
 
-        self.projection_polar = PolarProjectionDepth(
-            conf.z_max,
-            ppm,
-            conf.scale_range,
-            conf.z_min,
+        self.projection_polar = torch.nn.ModuleDict(
+            {
+                str(int(z)): PolarProjectionDepth(
+                    conf.z_max[i],
+                    ppm[i],
+                    conf.scale_range,
+                    conf.z_min,
+                )
+                for i, z in enumerate(z_max)
+            }
         )
-        self.projection_bev = CartesianProjection(
-            conf.z_max, conf.x_max, ppm, conf.z_min
+
+        self.projection_bev = torch.nn.ModuleDict(
+            {
+                str(int(z)): CartesianProjection(
+                    conf.z_max[i], conf.x_max[i], ppm[i], conf.z_min
+                )
+                for i, z in enumerate(z_max)
+            }
         )
-        self.template_sampler = TemplateSampler(
-            self.projection_bev.grid_xz, ppm, conf.num_rotations
+
+        self.template_sampler = torch.nn.ModuleDict(
+            {
+                str(int(z)): TemplateSampler(
+                    self.projection_bev[str(int(z))].grid_xz, ppm[i], conf.num_rotations
+                )
+                for i, z in enumerate(z_max)
+            }
         )
 
         if conf.mode == "inverse":
@@ -202,12 +222,22 @@ class BEVMapper(BaseModel):
                 )  # input_dim: feat_dim+score, out:feat_dim
             # TODO: rename z_max to max_depth?
             self.grid, self.grid_t_cam, self.cam_xy_pts, self.grid_xy_pts = (
-                build_frustum_grid(
-                    cell_size=conf.grid_cell_size,
-                    depth=conf.z_max,
-                    width=conf.x_max * 2 + conf.grid_cell_size,
-                )
+                {},
+                {},
+                {},
+                {},
             )
+            for i, z in enumerate(z_max):
+                (
+                    self.grid[z],
+                    self.grid_t_cam[z],
+                    self.cam_xy_pts[z],
+                    self.grid_xy_pts[z],
+                ) = build_frustum_grid(
+                    cell_size=conf.grid_cell_size[i],
+                    depth=conf.z_max[i],
+                    width=conf.x_max[i] * 2 + conf.grid_cell_size[i],
+                )
 
         elif conf.mode != "forward":
             raise ValueError(
@@ -230,6 +260,8 @@ class BEVMapper(BaseModel):
             self.feature_projection = torch.nn.Linear(
                 conf.latent_dim, conf.matching_dim
             )
+
+        self.bev_ij_pts = None  # TODO: get rid of this
 
     def _forward(self, data):
 
@@ -291,7 +323,7 @@ class BEVMapper(BaseModel):
 
             # cam_xy_pts are 2d grid points centered around the camera
             # grid_xy_pts are 2d grid points centered at the bev origin
-            xy = self.cam_xy_pts  # h,w,2
+            xy = self.cam_xy_pts[data["z_max"][0].item()]  # h,w,2
 
             if len(xy.shape) != 4:
                 xy = xy[None].repeat_interleave(tile_T_cam.shape[0], dim=0)
@@ -373,9 +405,13 @@ class BEVMapper(BaseModel):
 
             # Enforce a BEV shape of [129,64].
             # This allows us to generate a finer larger BEV and then downsample for memory efficiency
-            if self.conf.grid_cell_size != 1 / self.conf.pixel_per_meter:
-                h = int((self.conf.x_max * 2 * self.conf.pixel_per_meter) + 1)
-                w = int(self.conf.z_max * self.conf.pixel_per_meter)
+            idx = data["scale_idx"][0].item()
+            if (
+                self.conf.grid_cell_size[idx]
+                != 1 / self.conf.pixel_per_meter[idx]
+            ):
+                h = int((self.conf.x_max[idx] * 2 * self.conf.pixel_per_meter[idx]) + 1)
+                w = int(self.conf.z_max[idx] * self.conf.pixel_per_meter[idx])
                 f_bev = torch.nn.functional.interpolate(
                     f_bev.moveaxis(-1, -3),
                     size=(h, w),

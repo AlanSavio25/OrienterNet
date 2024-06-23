@@ -424,19 +424,42 @@
 #         training.trainer.max_steps=320000
 
 # 9_{18} SNAP coarse - 4x - 2mpp
-EXPERIMENT_NAME="9_18_snap_coarse_128m_2mpp"
+# EXPERIMENT_NAME="9_18_snap_coarse_128m_2mpp"
+# python -m maploc.train experiment.name=$EXPERIMENT_NAME \
+#         data.crop_size_meters=256 \
+#         data.max_init_error=192 \
+#         data.mask_pad=6 \
+#         data.pixel_per_meter=1 \
+#         model.pixel_per_meter=0.5 \
+#         data.tiles_filename=tiles_1mpp.pkl \
+#         model.map_encoder.backbone.output_scales=[1] \
+#         model.bev_mapper.z_max=128.0 \
+#         model.bev_mapper.x_max=128.0 \
+#         model.bev_mapper.image_encoder.backbone.encoder=resnet18 \
+#         training.lr=5e-5 \
+#         training.trainer.max_steps=320000
+
+
+# 10_0 Multi-scale Training
+EXPERIMENT_NAME="10_0_snap_multiscale_TEST"
 python -m maploc.train experiment.name=$EXPERIMENT_NAME \
-        data.crop_size_meters=256 \
-        data.max_init_error=192 \
-        data.mask_pad=6 \
-        data.pixel_per_meter=1 \
-        model.pixel_per_meter=0.5 \
-        data.tiles_filename=tiles_1mpp.pkl \
-        model.map_encoder.backbone.output_scales=[1] \
-        model.bev_mapper.z_max=128.0 \
-        model.bev_mapper.x_max=128.0 \
+        data.return_multiscale=True \
+        data.scenes=[amsterdam] \
+        data.crop_size_meters=[64,128,160] \
+        data.max_init_error=[48,96,96] \
+        data.pixel_per_meter=2 \
+        data.mask_pad=[4,2,1] \
+        model.pixel_per_meter=[2,1,0.5] \
+        data.tiles_filename=tiles.pkl \
+        model.map_encoder.scale_factor=[1,1,0.5] \
+        model.map_encoder.backbone.output_scales=[0,1,1] \
+        model.pixel_per_meter=[2.0,1.0,0.5] \
+        model.bev_mapper.grid_cell_size=[0.5,1,2] \
+        model.bev_mapper.x_max=[32.0,64.0,128.0] \
+        model.bev_mapper.z_max=[32.0,64.0,128.0] \
         model.bev_mapper.image_encoder.backbone.encoder=resnet18 \
         training.lr=5e-5 \
         training.trainer.max_steps=320000
+
 
 exit 0
