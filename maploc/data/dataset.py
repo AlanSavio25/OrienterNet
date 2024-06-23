@@ -340,8 +340,8 @@ class MapLocDataset(torchdata.Dataset):
 
         if self.cfg.return_multiscale:
             canvas = {z: c for z,c in zip(z_max, canvas)}
-            z_max = {z: torch.tensor(z).float() for z in z_max}
-            bev_ppm = {z: torch.tensor(bev_ppm).float() for (z, bev_ppm) in zip(z_max,self.cfg.bev_ppm)}
+            z_max = {z: torch.tensor([z]).float() for z in z_max}
+            bev_ppm = {z: torch.tensor([bev_ppm]).float() for (z, bev_ppm) in zip(z_max,self.cfg.bev_ppm)}
 
         return {
             **data,

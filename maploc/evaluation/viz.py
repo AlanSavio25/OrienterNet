@@ -320,7 +320,7 @@ def plot_example_single(
 
     scales_scores = pred["pixel_scales"]  # [..., 2:-7]
     # max_depth = model.model.conf.bev_mapper.z_max
-    max_depth = data["z_max"]
+    max_depth = data["z_max"][0].item()
     if max_depth == 256.0:
         scales_scores[..., -10:] = 0  # 256m
     elif max_depth == 128.0:

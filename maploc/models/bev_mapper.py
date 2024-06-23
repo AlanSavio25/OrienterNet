@@ -323,7 +323,7 @@ class BEVMapper(BaseModel):
 
             # cam_xy_pts are 2d grid points centered around the camera
             # grid_xy_pts are 2d grid points centered at the bev origin
-            xy = self.cam_xy_pts[data["z_max"][0].item()]  # h,w,2
+            xy = self.cam_xy_pts[data["z_max"][0][0].item()]  # h,w,2
 
             if len(xy.shape) != 4:
                 xy = xy[None].repeat_interleave(tile_T_cam.shape[0], dim=0)
@@ -406,10 +406,7 @@ class BEVMapper(BaseModel):
             # Enforce a BEV shape of [129,64].
             # This allows us to generate a finer larger BEV and then downsample for memory efficiency
             idx = data["scale_idx"][0].item()
-            if (
-                self.conf.grid_cell_size[idx]
-                != 1 / self.conf.pixel_per_meter[idx]
-            ):
+            if self.conf.grid_cell_size[idx] != 1 / self.conf.pixel_per_meter[idx]:
                 h = int((self.conf.x_max[idx] * 2 * self.conf.pixel_per_meter[idx]) + 1)
                 w = int(self.conf.z_max[idx] * self.conf.pixel_per_meter[idx])
                 f_bev = torch.nn.functional.interpolate(

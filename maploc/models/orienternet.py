@@ -315,7 +315,7 @@ class OrienterNet(BaseModel):
             valid_bev = torch.rot90(valid_bev, 1, dims=(-2, -1))
 
             template_sampler = self.bev_mapper.template_sampler[
-                str(int(data["z_max"][0].item()))
+                str(int(data["z_max"][0][0].item()))
             ]
             # template_sampler = self.bev_mapper.template_sampler
             scores = self.exhaustive_voting(
