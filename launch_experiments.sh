@@ -1,12 +1,12 @@
 #!/bin/bash
-#SBATCH --job-name=10_2_snap_multiscale
-#SBATCH --output=sbatch_outputs/10_2_snap_multiscale.out
+#SBATCH --job-name=10_2_snap_multiscale_cont
+#SBATCH --output=sbatch_outputs/10_2_snap_multiscale_cont.out
 #SBATCH --time=24:00:00
 #SBATCH --ntasks-per-node=14
 #SBATCH --mem-per-cpu=14G
 #SBATCH --account=ls_polle
 #SBATCH --gpus=1
-#SBATCH --gres=gpumem:25G
+#SBATCH --gres=gpumem:24G
 #SBATCH --signal=INT@600
 
 # nvidia_geforce_rtx_4090
