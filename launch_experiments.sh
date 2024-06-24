@@ -1,12 +1,12 @@
 #!/bin/bash
-#SBATCH --job-name=9_18_snap_coarse_128m_2mpp_cont
-#SBATCH --output=sbatch_outputs/9_18_snap_coarse_128m_2mpp_cont.out
+#SBATCH --job-name=10_2_snap_multiscale
+#SBATCH --output=sbatch_outputs/10_2_snap_multiscale.out
 #SBATCH --time=24:00:00
-#SBATCH --ntasks-per-node=8
-#SBATCH --mem-per-cpu=8G
+#SBATCH --ntasks-per-node=14
+#SBATCH --mem-per-cpu=14G
 #SBATCH --account=ls_polle
-#SBATCH --gpus=nvidia_geforce_rtx_4090:1
-#SBATCH --gres=gpumem:24G
+#SBATCH --gpus=1
+#SBATCH --gres=gpumem:25G
 #SBATCH --signal=INT@600
 
 # nvidia_geforce_rtx_4090
@@ -441,10 +441,9 @@
 
 
 # 10_0 Multi-scale Training
-EXPERIMENT_NAME="10_0_snap_multiscale_TEST"
+EXPERIMENT_NAME="10_2_snap_multiscale"
 python -m maploc.train experiment.name=$EXPERIMENT_NAME \
         data.return_multiscale=True \
-        data.scenes=[amsterdam] \
         data.crop_size_meters=[64,128,160] \
         data.max_init_error=[48,96,96] \
         data.pixel_per_meter=2 \
@@ -461,5 +460,6 @@ python -m maploc.train experiment.name=$EXPERIMENT_NAME \
         training.lr=5e-5 \
         training.trainer.max_steps=320000
 
+        # data.scenes=[amsterdam] \
 
 exit 0
