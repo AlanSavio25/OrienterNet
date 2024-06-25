@@ -29,6 +29,7 @@ class MapLocDataset(torchdata.Dataset):
         "return_multiscale": False,
         "z_max": 32.0,
         "bev_ppm": 2,
+        "scale_idx": None,
         "num_classes": None,
         "pixel_per_meter": "???",
         "crop_size_meters": "???",
@@ -342,6 +343,8 @@ class MapLocDataset(torchdata.Dataset):
             canvas = {z: c for z,c in zip(z_max, canvas)}
             z_max = {z: torch.tensor([z]).float() for z in z_max}
             bev_ppm = {z: torch.tensor([bev_ppm]).float() for (z, bev_ppm) in zip(z_max,self.cfg.bev_ppm)}
+            if self.cfg.scale_idx is not None:
+                data["scale_idx"] = self.cfg.scale_idx
 
         return {
             **data,
