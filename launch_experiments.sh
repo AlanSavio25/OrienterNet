@@ -1,12 +1,12 @@
 #!/bin/bash
-#SBATCH --job-name=10_2_snap_multiscale_cont
-#SBATCH --output=sbatch_outputs/10_2_snap_multiscale_cont.out
-#SBATCH --time=24:00:00
+#SBATCH --job-name=10_3_snap_multiscale
+#SBATCH --output=sbatch_outputs/10_3_snap_multiscale.out
+#SBATCH --time=48:00:00
 #SBATCH --ntasks-per-node=14
 #SBATCH --mem-per-cpu=14G
 #SBATCH --account=ls_polle
 #SBATCH --gpus=1
-#SBATCH --gres=gpumem:24G
+#SBATCH --gres=gpumem:25G
 #SBATCH --signal=INT@600
 
 # nvidia_geforce_rtx_4090
@@ -440,14 +440,35 @@
 #         training.trainer.max_steps=320000
 
 
-# 10_0 Multi-scale Training
-EXPERIMENT_NAME="10_2_snap_multiscale"
+# 10_2 Multi-scale Training
+# EXPERIMENT_NAME="10_2_snap_multiscale"
+# python -m maploc.train experiment.name=$EXPERIMENT_NAME \
+#         data.return_multiscale=True \
+#         data.crop_size_meters=[64,128,160] \
+#         data.max_init_error=[48,96,96] \
+#         data.pixel_per_meter=2 \
+#         data.mask_pad=[4,2,1] \
+#         model.pixel_per_meter=[2,1,0.5] \
+#         data.tiles_filename=tiles.pkl \
+#         model.map_encoder.scale_factor=[1,1,0.5] \
+#         model.map_encoder.backbone.output_scales=[0,1,1] \
+#         model.pixel_per_meter=[2.0,1.0,0.5] \
+#         model.bev_mapper.grid_cell_size=[0.5,1,2] \
+#         model.bev_mapper.x_max=[32.0,64.0,128.0] \
+#         model.bev_mapper.z_max=[32.0,64.0,128.0] \
+#         model.bev_mapper.image_encoder.backbone.encoder=resnet18 \
+#         training.lr=5e-5 \
+#         training.trainer.max_steps=320000
+
+        # data.scenes=[amsterdam] \
+# 10_3 => fixed mask pad
+EXPERIMENT_NAME="10_3_snap_multiscale"
 python -m maploc.train experiment.name=$EXPERIMENT_NAME \
         data.return_multiscale=True \
         data.crop_size_meters=[64,128,160] \
         data.max_init_error=[48,96,96] \
         data.pixel_per_meter=2 \
-        data.mask_pad=[4,2,1] \
+        data.mask_pad=[1,2,4] \
         model.pixel_per_meter=[2,1,0.5] \
         data.tiles_filename=tiles.pkl \
         model.map_encoder.scale_factor=[1,1,0.5] \
@@ -459,7 +480,4 @@ python -m maploc.train experiment.name=$EXPERIMENT_NAME \
         model.bev_mapper.image_encoder.backbone.encoder=resnet18 \
         training.lr=5e-5 \
         training.trainer.max_steps=320000
-
-        # data.scenes=[amsterdam] \
-
 exit 0
