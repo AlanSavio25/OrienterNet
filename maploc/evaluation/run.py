@@ -62,7 +62,7 @@ def evaluate_single_image_chain(
     **kwargs,
 ):
 
-    ppm = models[0].model.conf.pixel_per_meter
+    # ppm = models[0].model.conf.pixel_per_meter
     metrics = MetricCollection(models[0].model.metrics())
     metrics = metrics.to(models[0].device)
 
@@ -77,7 +77,8 @@ def evaluate_single_image_chain(
         if kwargs.get("selected_images"):
             if batch_["name"][0] not in kwargs.get("selected_images"):
                 continue
-        for model in models:
+        for scale_idx, model in enumerate(models):
+            batch_["scale_idx"] = torch.tensor([scale_idx])
             batch = model.transfer_batch_to_device(batch_, model.device, i)
             pred = model(batch)
             preds.append(pred)
@@ -103,7 +104,7 @@ def evaluate_single_image_chain(
         yaw_max = 180 - uvr_max[..., -1]
         map_T_max = Transform2D.from_degrees(yaw_max.unsqueeze(-1), ij_max)
         pred["map_T_cam_max"] = map_T_max
-        pred["tile_T_cam_max"] = Transform2D.from_pixels(map_T_max, 1 / ppm)
+        pred["tile_T_cam_max"] = Transform2D.from_pixels(map_T_max, 1 / batch["bev_ppm"].item())
         pred["log_probs"] = log_probs_chained
 
         names += batch["name"]
