@@ -24,6 +24,8 @@ from ..utils.io import DATA_URL, download_file, read_json
 from .utils import write_dump
 from .viz import plot_example_sequential, plot_example_single
 
+from copy import deepcopy
+
 pretrained_models = dict(
     OrienterNet_MGL=("orienternet_mgl.ckpt", dict(num_rotations=256)),
 )
@@ -77,6 +79,95 @@ def evaluate_single_image_chain(
         if kwargs.get("selected_images"):
             if batch_["name"][0] not in kwargs.get("selected_images"):
                 continue
+        # for scale_idx, model in enumerate(models):
+
+        if kwargs["singlemodel_randomscale"]:
+            model = models[0]
+            bev_depths = batch_["z_max"]
+            for bev_depth in bev_depths:
+                # the index is where this is in the bev model.
+                scale_idx = models[0].model.conf.bev_mapper.z_max.index(bev_depth)
+                batch_["scale_idx"] = torch.tensor([scale_idx])
+                batch = model.transfer_batch_to_device(
+                    deepcopy(batch_), model.device, i
+                )
+                pred = model(batch)
+                preds.append(pred)
+                batches.append(batch)
+
+        else:
+
+            for model in enumerate(models):
+                # batch_["scale_idx"] = torch.tensor([scale_idx])
+                batch = model.transfer_batch_to_device(batch_, model.device, i)
+                pred = model(batch)
+                preds.append(pred)
+                batches.append(batch)
+
+        scores = [pred["scores"] for pred in preds]
+        h = w = max([score.shape[-2] for score in scores])
+        scores = [
+            torch.nn.functional.interpolate(
+                score.moveaxis(-1, -3), size=(h, w), mode="bilinear"
+            ).moveaxis(-3, -1)
+            for score in scores
+        ]
+        log_probs = [log_softmax_spatial(score) for score in scores]
+        log_probs_chained = log_softmax_spatial(torch.stack(log_probs).sum(0))
+
+        pred = preds[0]
+        model = models[0]
+        batch = batches[0]
+
+        uvr_max = argmax_xyr(log_probs_chained)
+        ij_max = torch.flip(uvr_max[..., :2], dims=[-1])
+        yaw_max = 180 - uvr_max[..., -1]
+        map_T_max = Transform2D.from_degrees(yaw_max.unsqueeze(-1), ij_max)
+        pred["map_T_cam_max"] = map_T_max
+        pred["tile_T_cam_max"] = Transform2D.from_pixels(
+            map_T_max, 1 / batch["bev_ppm"].item()
+        )
+        pred["log_probs"] = log_probs_chained
+
+        names += batch["name"]
+
+        results = metrics(pred, batch)
+        if callback is not None:
+            callback(
+                i, model, unbatch_to_device(pred), unbatch_to_device(batch), results
+            )
+        del batches, preds, results
+
+    return metrics.cpu(), names
+
+
+@torch.no_grad()
+def evaluate_single_image_chain_RandomScale(
+    dataloader: torch.utils.data.DataLoader,
+    model: GenericModule,
+    num: Optional[int] = None,
+    callback: Optional[Callable] = None,
+    progress: bool = True,
+    mask_index: Optional[Tuple[int]] = None,
+    has_gps: bool = False,
+    **kwargs,
+):
+
+    # ppm = models[0].model.conf.pixel_per_meter
+    metrics = MetricCollection(models[0].model.metrics())
+    metrics = metrics.to(models[0].device)
+
+    names = []
+
+    for i, batch_ in enumerate(
+        islice(tqdm(dataloader, total=num, disable=not progress), num)
+    ):
+
+        preds = []
+        batches = []
+        if kwargs.get("selected_images"):
+            if batch_["name"][0] not in kwargs.get("selected_images"):
+                continue
         for scale_idx, model in enumerate(models):
             batch_["scale_idx"] = torch.tensor([scale_idx])
             batch = model.transfer_batch_to_device(batch_, model.device, i)
@@ -104,7 +195,9 @@ def evaluate_single_image_chain(
         yaw_max = 180 - uvr_max[..., -1]
         map_T_max = Transform2D.from_degrees(yaw_max.unsqueeze(-1), ij_max)
         pred["map_T_cam_max"] = map_T_max
-        pred["tile_T_cam_max"] = Transform2D.from_pixels(map_T_max, 1 / batch["bev_ppm"].item())
+        pred["tile_T_cam_max"] = Transform2D.from_pixels(
+            map_T_max, 1 / batch["bev_ppm"].item()
+        )
         pred["log_probs"] = log_probs_chained
 
         names += batch["name"]
@@ -323,12 +416,24 @@ def select_images_from_log(log_paths):
         #     n
         #     for (n, f, c, C) in list(zip(sorted_names, logs[0], logs[1], logs[2]))
         #     if f <= 4
-        diff = -np.array(logs[0]) + np.array(logs[len(log_paths) - 1])
+        # diff = -np.array(logs[0]) + np.array(logs[len(log_paths) - 1])
+        # selected_images = [
+        #     n for value, n in sorted(list(zip(diff, sorted_names)), key=lambda x: x[0])
+        # ]
+
         selected_images = [
-            n for value, n in sorted(list(zip(diff, sorted_names)), key=lambda x: x[0])
+            n
+            for (n, single, multiscale) in list(zip(sorted_names, logs[0], logs[1]))
+            if (single < 5 and multiscale > 20)
+        ][:25] + [
+            n
+            for (n, single, multiscale) in list(zip(sorted_names, logs[0], logs[1]))
+            if (single > 20 and multiscale < 5)
+        ][
+            :25
         ]
 
-    return selected_images[:5]
+    return selected_images[:50]
 
 
 def evaluate_chain(
@@ -385,59 +490,60 @@ def evaluate_chain(
         logger.info("Outputs have been written to %s.", output_dir)
     return metrics
 
-def evaluate_chain(
-    experiments: List[str],
-    cfgs: List[DictConfig],
-    dataset,
-    split: str,
-    output_dir: Optional[Path] = None,
-    callback: Optional[Callable] = None,
-    num_workers: int = 1,
-    viz_kwargs=None,
-    **kwargs,
-):
 
-    logger.info("Evaluating models %s", experiments)
+# def evaluate_chain(
+#     experiments: List[str],
+#     cfgs: List[DictConfig],
+#     dataset,
+#     split: str,
+#     output_dir: Optional[Path] = None,
+#     callback: Optional[Callable] = None,
+#     num_workers: int = 1,
+#     viz_kwargs=None,
+#     **kwargs,
+# ):
 
-    models = []
-    for experiment, cfg in zip(experiments, cfgs):
-        checkpoint_path = resolve_checkpoint_path(experiment)
-        model = GenericModule.load_from_checkpoint(
-            checkpoint_path, cfg=cfg, find_best=not experiment.endswith(".ckpt")
-        )
-        model = model.eval()
-        if torch.cuda.is_available():
-            model = model.cuda()
-        models.append(model)
+#     logger.info("Evaluating models %s", experiments)
 
-    dataset.prepare_data()
-    dataset.setup()
+#     models = []
+#     for experiment, cfg in zip(experiments, cfgs):
+#         checkpoint_path = resolve_checkpoint_path(experiment)
+#         model = GenericModule.load_from_checkpoint(
+#             checkpoint_path, cfg=cfg, find_best=not experiment.endswith(".ckpt")
+#         )
+#         model = model.eval()
+#         if torch.cuda.is_available():
+#             model = model.cuda()
+#         models.append(model)
 
-    plot_images = kwargs.get("plot_images")
-    if output_dir is not None:
-        output_dir.mkdir(exist_ok=True, parents=True)
-        if callback is None and plot_images:
-            callback = plot_example_single
-            callback = functools.partial(
-                callback, out_dir=output_dir, return_plots=True, **(viz_kwargs or {})
-            )
-    kwargs = {**kwargs, "callback": callback}
+#     dataset.prepare_data()
+#     dataset.setup()
 
-    if kwargs.get("select_images_from_logs"):
-        kwargs["selected_images"] = select_images_from_log(
-            kwargs.get("select_images_from_logs")
-        )
-    seed_everything(dataset.cfg.seed)
+#     plot_images = kwargs.get("plot_images")
+#     if output_dir is not None:
+#         output_dir.mkdir(exist_ok=True, parents=True)
+#         if callback is None and plot_images:
+#             callback = plot_example_single
+#             callback = functools.partial(
+#                 callback, out_dir=output_dir, return_plots=True, **(viz_kwargs or {})
+#             )
+#     kwargs = {**kwargs, "callback": callback}
 
-    loader = dataset.dataloader(split, shuffle=True, num_workers=num_workers)
-    metrics, names = evaluate_single_image_chain(loader, models, **kwargs)
+#     if kwargs.get("select_images_from_logs"):
+#         kwargs["selected_images"] = select_images_from_log(
+#             kwargs.get("select_images_from_logs")
+#         )
+#     seed_everything(dataset.cfg.seed)
 
-    results = metrics.compute()
-    logger.info("All results: %s", results)
-    if output_dir is not None and not plot_images:
-        write_dump(output_dir, experiments[0], cfg, results, metrics, names)
-        logger.info("Outputs have been written to %s.", output_dir)
-    return metrics
+#     loader = dataset.dataloader(split, shuffle=True, num_workers=num_workers)
+#     metrics, names = evaluate_single_image_chain(loader, models, **kwargs)
+
+#     results = metrics.compute()
+#     logger.info("All results: %s", results)
+#     if output_dir is not None and not plot_images:
+#         write_dump(output_dir, experiments[0], cfg, results, metrics, names)
+#         logger.info("Outputs have been written to %s.", output_dir)
+#     return metrics
 
 
 def evaluate(
