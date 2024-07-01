@@ -45,9 +45,16 @@ def plot_example_single(
 
     scene, name, tile_T_cam_gt = (data[k] for k in ("scene", "name", "tile_T_cam"))
 
-    map_T_cam_gt = Transform2D.to_pixels(
-        tile_T_cam_gt, 1 / data["bev_ppm"]
-    )
+    if "scale_idx" in data:
+        idx = data["scale_idx"][0].item()
+        bev_ppm = model.model.conf.pixel_per_meter[idx]
+    else:
+        bev_ppm = model.model.conf.pixel_per_meter
+
+    # map_T_cam_gt = Transform2D.to_pixels(
+    #     tile_T_cam_gt, 1 / data["bev_ppm"]
+    # )
+    map_T_cam_gt = Transform2D.to_pixels(tile_T_cam_gt, 1 / bev_ppm)
 
     m_t_c_gt = map_T_cam_gt.t.squeeze(0)  # ij_gt
     yaw_gt = map_T_cam_gt.angle.squeeze(0)  # m_r_c_gt
@@ -188,7 +195,7 @@ def plot_example_single(
     if show_gps and tile_t_gps is not None:
         m_t_gps = Transform2D.to_pixels(
             tile_t_gps,
-            1 / data["bev_ppm"],
+            1 / bev_ppm,
         )
         plot_pose(
             [1] + ([2] if len(maps_viz) > 1 else []), m_t_gps, c="blue", refactored=True
@@ -320,14 +327,19 @@ def plot_example_single(
 
     scales_scores = pred["pixel_scales"]  # [..., 2:-7]
     # max_depth = model.model.conf.bev_mapper.z_max
-    max_depth = data["z_max"][0].item()
-    if max_depth == 256.0:
+    if "scale_idx" in data:
+        idx = data["scale_idx"][0].item()
+        z_max = model.model.conf.bev_mapper.z_max[idx]
+    else:
+        z_max = model.model.conf.bev_mapper.z_max
+
+    if z_max == 256.0:
         scales_scores[..., -10:] = 0  # 256m
-    elif max_depth == 128.0:
+    elif z_max == 128.0:
         scales_scores[..., -10:] = 0  # 128m
-    elif max_depth == 64.0:
+    elif z_max == 64.0:
         scales_scores[..., :2] = scales_scores[..., -10:] = 0  # 64m
-    elif max_depth == 32.0:
+    elif z_max == 32.0:
         scales_scores[..., :6] = scales_scores[..., -7:] = 0  # 32m
     # max_scoring_scale = scales_scores.max(-1).indices  # scale with highest score
 

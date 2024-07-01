@@ -17,6 +17,7 @@ model:
     output_dim: ${..matching_dim}
     num_classes: ${data.num_classes}
     scale_factor:
+    max_pool_ksize:
     backbone:
       encoder: vgg19
       pretrained: false
@@ -67,6 +68,9 @@ model:
       latent_dim: ${...latent_dim}
       output_dim: ${...matching_dim}
       confidence: true
+      mlp:
+        layers:
+        input_dim:
   ransac_matcher: false
   chop_bev: false
   normalize_features: false

@@ -65,7 +65,7 @@ def run(
     default = default_cfg_sequential if sequential else default_cfg_single
     default = OmegaConf.merge(default, dict(data=split_overrides[split]))
 
-    if cfg_path is not None:
+    if kwargs["chain"]:
         cfgs = []
         if isinstance(cfg, dict):
             cfg = OmegaConf.create(cfg)
@@ -85,7 +85,7 @@ def run(
         cfgs = [cfg]
         dataset = MapillaryDataModule(cfg.get("data", {}))
 
-    if len(experiment) == 1:
+    if not kwargs["chain"]:
         metrics = evaluate(
             experiment[0], cfgs[0], dataset, split, sequential=sequential, **kwargs
         )
@@ -123,6 +123,8 @@ if __name__ == "__main__":
     parser.add_argument("--plot_images", action="store_true")
     parser.add_argument("--select_images_from_logs", nargs="*", type=Path)
     parser.add_argument("--cfg_path", nargs="*", type=Path)
+    parser.add_argument("--chain", action="store_true")
+    parser.add_argument("--singlemodel_randomscale", action="store_true")
     parser.add_argument("dotlist", nargs="*")
     args = parser.parse_args()
     cfg = OmegaConf.from_cli(args.dotlist)
@@ -136,4 +138,6 @@ if __name__ == "__main__":
         num=args.num,
         plot_images=args.plot_images,
         select_images_from_logs=args.select_images_from_logs,
+        chain=args.chain,
+        singlemodel_randomscale=args.singlemodel_randomscale,
     )

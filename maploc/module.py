@@ -178,7 +178,7 @@ class GenericModule(pl.LightningModule):
                 if batch.get("scale_idx", None) is not None:
                     scale_idx = batch.get("scale_idx")[0].item()
                 else:
-                    scale_idx = 1  # Fixed for validation
+                    scale_idx = 1 if len(self.cfg.model.bev_mapper.z_max) > 1 else 0 # Fixed for validation
             z_max = self.cfg.model.bev_mapper.z_max[scale_idx]
             batch["scale_idx"] = torch.tensor(scale_idx).unsqueeze(0)
             keys = [
