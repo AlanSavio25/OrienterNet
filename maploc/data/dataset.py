@@ -91,7 +91,8 @@ class MapLocDataset(torchdata.Dataset):
 
         if not isinstance(list(self.tile_managers.values())[0], list):
             for scene in self.tile_managers:
-                self.tile_managers[scene] = [self.tile_managers[scene]]*len(self.cfg.crop_size_meters)
+                if not isinstance(self.cfg.crop_size_meters, (float, int)):
+                    self.tile_managers[scene] = [self.tile_managers[scene]]*len(self.cfg.crop_size_meters)
 
     def __len__(self):
         return len(self.names)
@@ -118,10 +119,11 @@ class MapLocDataset(torchdata.Dataset):
             error = np.random.RandomState(seed).uniform(-1, 1, size=2)
 
         if self.cfg.return_multiscale:
-            xy_w_init += error * min(self.cfg.max_init_error)
+            # xy_w_init += error * min(self.cfg.max_init_error)
+            xy_w_init = [xy_w_init + error*max_init_error for max_init_error in self.cfg.max_init_error]
             bbox_tile = [
-                BoundaryBox(xy_w_init - crop_size_meters, xy_w_init + crop_size_meters)
-                for crop_size_meters in self.cfg.crop_size_meters
+                BoundaryBox(init - crop_size_meters, init + crop_size_meters)
+                for (crop_size_meters,init) in zip(self.cfg.crop_size_meters, xy_w_init)
             ]
         else:
             xy_w_init += error * self.cfg.max_init_error
@@ -345,6 +347,8 @@ class MapLocDataset(torchdata.Dataset):
             bev_ppm = {z: torch.tensor([bev_ppm]).float() for (z, bev_ppm) in zip(z_max,self.cfg.bev_ppm)}
             if self.cfg.scale_idx is not None:
                 data["scale_idx"] = self.cfg.scale_idx
+            data["z_max"] = z_max
+            data["bev_ppm"] = bev_ppm
 
         return {
             **data,
@@ -362,8 +366,6 @@ class MapLocDataset(torchdata.Dataset):
             "map_T_cam": map_T_cam,
             "map_t_init": map_t_init,
             "pixels_per_meter": ppm,
-            "z_max": z_max,
-            "bev_ppm": bev_ppm,
         }
 
     def process_image(self, image, cam, seed, cam_R_gcam, rectify=True):
