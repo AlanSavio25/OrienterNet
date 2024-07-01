@@ -92,7 +92,9 @@ class MapLocDataset(torchdata.Dataset):
         if not isinstance(list(self.tile_managers.values())[0], list):
             for scene in self.tile_managers:
                 if not isinstance(self.cfg.crop_size_meters, (float, int)):
-                    self.tile_managers[scene] = [self.tile_managers[scene]]*len(self.cfg.crop_size_meters)
+                    self.tile_managers[scene] = [self.tile_managers[scene]] * len(
+                        self.cfg.crop_size_meters
+                    )
 
     def __len__(self):
         return len(self.names)
@@ -120,10 +122,15 @@ class MapLocDataset(torchdata.Dataset):
 
         if self.cfg.return_multiscale:
             # xy_w_init += error * min(self.cfg.max_init_error)
-            xy_w_init = [xy_w_init + error*max_init_error for max_init_error in self.cfg.max_init_error]
+            xy_w_init = [
+                xy_w_init + error * max_init_error
+                for max_init_error in self.cfg.max_init_error
+            ]
             bbox_tile = [
                 BoundaryBox(init - crop_size_meters, init + crop_size_meters)
-                for (crop_size_meters,init) in zip(self.cfg.crop_size_meters, xy_w_init)
+                for (crop_size_meters, init) in zip(
+                    self.cfg.crop_size_meters, xy_w_init
+                )
             ]
         else:
             xy_w_init += error * self.cfg.max_init_error
@@ -205,7 +212,8 @@ class MapLocDataset(torchdata.Dataset):
 
         if self.cfg.return_multiscale:
             world_T_tile = {
-                z: Transform2D.from_Rt(torch.eye(2), c.bbox.min_) for z, c in zip(z_max, canvas)
+                z: Transform2D.from_Rt(torch.eye(2), c.bbox.min_)
+                for z, c in zip(z_max, canvas)
             }
             tile_T_cam = {
                 z: (w_T_t.inv() @ world_T_cam2d).float()
@@ -316,8 +324,7 @@ class MapLocDataset(torchdata.Dataset):
                     (world_t_gps - w_T_t.t).float() for w_T_t in world_T_tile.values()
                 ]
                 data["tile_t_gps"] = {
-                    z: t_t_gps
-                    for (z, t_t_gps) in zip(z_max, tile_t_gps)
+                    z: t_t_gps for (z, t_t_gps) in zip(z_max, tile_t_gps)
                 }
                 data["map_t_gps"] = {
                     z: Transform2D.to_pixels(t_t_gps, 1 / c.ppm)
@@ -342,9 +349,12 @@ class MapLocDataset(torchdata.Dataset):
             data["chunk_id"] = (scene, seq, self.data["chunk_index"][idx])
 
         if self.cfg.return_multiscale:
-            canvas = {z: c for z,c in zip(z_max, canvas)}
+            canvas = {z: c for z, c in zip(z_max, canvas)}
             z_max = {z: torch.tensor([z]).float() for z in z_max}
-            bev_ppm = {z: torch.tensor([bev_ppm]).float() for (z, bev_ppm) in zip(z_max,self.cfg.bev_ppm)}
+            bev_ppm = {
+                z: torch.tensor([bev_ppm]).float()
+                for (z, bev_ppm) in zip(z_max, self.cfg.bev_ppm)
+            }
             if self.cfg.scale_idx is not None:
                 data["scale_idx"] = self.cfg.scale_idx
             data["z_max"] = z_max
