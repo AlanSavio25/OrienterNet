@@ -3,6 +3,8 @@
 import torch.nn as nn
 from torchvision.models.resnet import Bottleneck
 
+from maploc.models.mlp import MLP
+
 from .base import BaseModel
 from .feature_extractor import AdaptationBlock
 from .utils import checkpointed
@@ -19,6 +21,7 @@ class BEVNet(BaseModel):
         "norm_layer": "nn.BatchNorm2d",  # normalization ind decoder blocks
         "checkpointed": False,  # whether to use gradient checkpointing
         "padding": "zeros",
+        "mlp": None,
     }
 
     def _init(self, conf):
@@ -33,8 +36,16 @@ class BEVNet(BaseModel):
                     norm_layer=eval(conf.norm_layer),
                 )
             )
-        self.blocks = nn.Sequential(*blocks)
-        self.output_layer = AdaptationBlock(conf.latent_dim, conf.output_dim)
+        self.blocks = nn.Sequential(*blocks)  # 71k params
+
+        # When net is multi-scale, we cannot use conv2d, so we use mlp
+        if conf.mlp is not None:
+            self.mlp = MLP(conf.mlp)  # 66k params
+
+        self.output_layer = AdaptationBlock(
+            conf.latent_dim, conf.output_dim
+        )  # 1032 params
+
         if conf.confidence:
             self.confidence_layer = AdaptationBlock(conf.latent_dim, 1)
 
@@ -43,10 +54,12 @@ class BEVNet(BaseModel):
                 module.padding_mode = conf.padding
 
         if conf.padding != "zeros":
-            self.bocks.apply(update_padding)
+            self.blocks.apply(update_padding)
 
     def _forward(self, data):
         features = self.blocks(data["input"])
+        if self.conf.mlp is not None:
+            features = self.mlp(features.moveaxis(-3, -1)).moveaxis(-1, -3)
         pred = {
             "output": self.output_layer(features),
         }
