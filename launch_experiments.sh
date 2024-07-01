@@ -1,12 +1,12 @@
 #!/bin/bash
-#SBATCH --job-name=10_3_snap_multiscale
-#SBATCH --output=sbatch_outputs/10_3_snap_multiscale.out
+#SBATCH --job-name=10_6_snap_multiscale_test_DEBUG64m
+#SBATCH --output=sbatch_outputs/10_6_snap_multiscale_test_DEBUG64m.out
 #SBATCH --time=48:00:00
 #SBATCH --ntasks-per-node=14
 #SBATCH --mem-per-cpu=14G
 #SBATCH --account=ls_polle
-#SBATCH --gpus=1
-#SBATCH --gres=gpumem:25G
+#SBATCH --gpus=nvidia_geforce_rtx_4090:1
+#SBATCH --gres=gpumem:22G
 #SBATCH --signal=INT@600
 
 # nvidia_geforce_rtx_4090
@@ -448,6 +448,28 @@
 #         data.max_init_error=[48,96,96] \
 #         data.pixel_per_meter=2 \
 #         data.mask_pad=[4,2,1] \
+#         data.tiles_filename=tiles.pkl \
+#         model.map_encoder.scale_factor=[1,1,0.5] \
+#         model.map_encoder.backbone.output_scales=[0,1,1] \
+#         model.pixel_per_meter=[2,1,0.5] \
+#         model.pixel_per_meter=[2.0,1.0,0.5] \
+#         model.bev_mapper.grid_cell_size=[0.5,1,2] \
+#         model.bev_mapper.x_max=[32.0,64.0,128.0] \
+#         model.bev_mapper.z_max=[32.0,64.0,128.0] \
+#         model.bev_mapper.image_encoder.backbone.encoder=resnet18 \
+#         training.lr=5e-5 \
+#         training.trainer.max_steps=320000
+
+        # data.scenes=[amsterdam] \
+
+# 10_3 => fixed mask pad
+# EXPERIMENT_NAME="10_3_snap_multiscale"
+# python -m maploc.train experiment.name=$EXPERIMENT_NAME \
+#         data.return_multiscale=True \
+#         data.crop_size_meters=[64,128,160] \
+#         data.max_init_error=[48,96,96] \
+#         data.pixel_per_meter=2 \
+#         data.mask_pad=[1,2,4] \
 #         model.pixel_per_meter=[2,1,0.5] \
 #         data.tiles_filename=tiles.pkl \
 #         model.map_encoder.scale_factor=[1,1,0.5] \
@@ -460,24 +482,124 @@
 #         training.lr=5e-5 \
 #         training.trainer.max_steps=320000
 
-        # data.scenes=[amsterdam] \
-# 10_3 => fixed mask pad
-EXPERIMENT_NAME="10_3_snap_multiscale"
+
+# 10_4 => Changed BEV NET from Res Block + Adaptation to simple MLP.
+# EXPERIMENT_NAME="10_4_snap_multiscale"
+# python -m maploc.train experiment.name=$EXPERIMENT_NAME \
+#         data.return_multiscale=True \
+#         data.crop_size_meters=[64,128,160] \
+#         data.max_init_error=[48,96,96] \
+#         data.pixel_per_meter=2 \
+#         data.mask_pad=[1,2,4] \
+#         model.pixel_per_meter=[2,1,0.5] \
+#         data.tiles_filename=tiles.pkl \
+#         model.map_encoder.scale_factor=[1,1,0.5] \
+#         model.map_encoder.backbone.output_scales=[0,1,1] \
+#         model.pixel_per_meter=[2.0,1.0,0.5] \
+#         model.bev_mapper.grid_cell_size=[0.5,1,2] \
+#         model.bev_mapper.x_max=[32.0,64.0,128.0] \
+#         model.bev_mapper.z_max=[32.0,64.0,128.0] \
+#         model.bev_mapper.image_encoder.backbone.encoder=resnet18 \
+#         model.bev_mapper.bev_net.num_blocks=0 \
+#         model.bev_mapper.bev_net.mlp.layers=[128,128,8] \
+#         model.bev_mapper.bev_net.mlp.input_dim=128 \
+#         training.lr=5e-5 \
+#         training.trainer.max_steps=320000
+
+## Single Random Scale: SHARING OUTPUT LEVEL [Image Features, Neural Map]
+# 10_5 => Fix BEV Net (MLP) and MAP (MaxPool) [has artifacts, BEV net is slightly weaker than 10_6]
+# EXPERIMENT_NAME="10_5_snap_multiscale"
+# python -m maploc.train experiment.name=$EXPERIMENT_NAME \
+#         data.return_multiscale=True \
+#         data.crop_size_meters=[64,128,160] \
+#         data.max_init_error=[48,96,96] \
+#         data.pixel_per_meter=2 \
+#         data.mask_pad=[1,2,4] \
+#         model.pixel_per_meter=[2,1,0.5] \
+#         data.tiles_filename=tiles.pkl \
+#         model.map_encoder.backbone.output_scales=[0] \
+#         model.map_encoder.max_pool_ksize=[1,2,4] \
+#         model.pixel_per_meter=[2.0,1.0,0.5] \
+#         model.bev_mapper.grid_cell_size=[0.5,1,2] \
+#         model.bev_mapper.x_max=[32.0,64.0,128.0] \
+#         model.bev_mapper.z_max=[32.0,64.0,128.0] \
+#         model.bev_mapper.image_encoder.backbone.encoder=resnet18 \
+#         model.bev_mapper.bev_net.num_blocks=0 \
+#         model.bev_mapper.bev_net.mlp.layers=[128,128,8] \
+#         model.bev_mapper.bev_net.mlp.input_dim=128 \
+#         training.lr=5e-5 \
+#         training.trainer.max_steps=320000
+
+        # model.map_encoder.scale_factor=[1,1,1] \
+
+## Single Random Scale: SHARING OUTPUT LEVEL [Image Features, Neural Map]
+# 10_6 => Fix max_init_error (artifacts), update BEV Net (MLP)
+# EXPERIMENT_NAME="10_6_snap_multiscale_test"
+# python -m maploc.train experiment.name=$EXPERIMENT_NAME \
+#         data.tiles_filename=tiles.pkl \
+#         data.return_multiscale=True \
+#         data.crop_size_meters=[64,128,160] \
+#         data.max_init_error=[48,96,96] \
+#         data.pixel_per_meter=2 \
+#         data.mask_pad=[1,2,4] \
+#         model.map_encoder.backbone.output_scales=[0] \
+#         model.map_encoder.max_pool_ksize=[1,2,4] \
+#         model.pixel_per_meter=[2.0,1.0,0.5] \
+#         model.bev_mapper.grid_cell_size=[0.5,1,2] \
+#         model.bev_mapper.x_max=[32.0,64.0,128.0] \
+#         model.bev_mapper.z_max=[32.0,64.0,128.0] \
+#         model.bev_mapper.image_encoder.backbone.encoder=resnet18 \
+#         model.bev_mapper.bev_net.num_blocks=0 \
+#         model.bev_mapper.bev_net.mlp.layers=[256,128] \
+#         model.bev_mapper.bev_net.mlp.input_dim=128 \
+#         training.lr=5e-5 \
+#         training.trainer.max_steps=320000
+
+# 10_6_debug => Fix max_init_error (artifacts), update BEV Net (MLP)
+EXPERIMENT_NAME="10_6_snap_multiscale_test_DEBUG64m"
 python -m maploc.train experiment.name=$EXPERIMENT_NAME \
-        data.return_multiscale=True \
-        data.crop_size_meters=[64,128,160] \
-        data.max_init_error=[48,96,96] \
-        data.pixel_per_meter=2 \
-        data.mask_pad=[1,2,4] \
-        model.pixel_per_meter=[2,1,0.5] \
         data.tiles_filename=tiles.pkl \
-        model.map_encoder.scale_factor=[1,1,0.5] \
-        model.map_encoder.backbone.output_scales=[0,1,1] \
-        model.pixel_per_meter=[2.0,1.0,0.5] \
-        model.bev_mapper.grid_cell_size=[0.5,1,2] \
-        model.bev_mapper.x_max=[32.0,64.0,128.0] \
-        model.bev_mapper.z_max=[32.0,64.0,128.0] \
+        data.return_multiscale=True \
+        data.crop_size_meters=[128] \
+        data.max_init_error=[96] \
+        data.pixel_per_meter=2 \
+        data.mask_pad=[2] \
+        model.map_encoder.backbone.output_scales=[0] \
+        model.map_encoder.max_pool_ksize=[2] \
+        model.pixel_per_meter=[1.0] \
+        model.bev_mapper.grid_cell_size=[1] \
+        model.bev_mapper.x_max=[64.0] \
+        model.bev_mapper.z_max=[64.0] \
         model.bev_mapper.image_encoder.backbone.encoder=resnet18 \
+        model.bev_mapper.bev_net.num_blocks=0 \
+        model.bev_mapper.bev_net.mlp.layers=[256,128] \
+        model.bev_mapper.bev_net.mlp.input_dim=128 \
         training.lr=5e-5 \
         training.trainer.max_steps=320000
+
+
+# # 10_7 => Split Features (final layer 2x) and Map (pyramid)
+# EXPERIMENT_NAME="10_7_snap_multiscale_test"
+# python -m maploc.train experiment.name=$EXPERIMENT_NAME \
+#         data.tiles_filename=tiles.pkl \
+#         data.return_multiscale=True \
+#         data.crop_size_meters=[64,128,160] \
+#         data.max_init_error=[48,96,96] \
+#         data.pixel_per_meter=2 \
+#         data.mask_pad=[1,2,4] \
+#         model.map_encoder.backbone.output_scales=[0,1,1] \
+#         model.map_encoder.max_pool_ksize=[1,1,2] \
+#         model.bev_mapper.image_encoder.backbone.encoder=resnet18 \
+#         model.bev_mapper.image_encoder.backbone.output_dim=256 \
+#         model.bev_mapper.feature_map_split_idx=[0,1,1] \
+#         model.pixel_per_meter=[2.0,1.0,0.5] \
+#         model.bev_mapper.grid_cell_size=[0.5,1,2] \
+#         model.bev_mapper.x_max=[32.0,64.0,128.0] \
+#         model.bev_mapper.z_max=[32.0,64.0,128.0] \
+#         model.bev_mapper.bev_net.num_blocks=0 \
+#         model.bev_mapper.bev_net.mlp.layers=[256,128] \
+#         model.bev_mapper.bev_net.mlp.input_dim=128 \
+#         training.lr=5e-5 \
+#         training.trainer.max_steps=320000
+
 exit 0
