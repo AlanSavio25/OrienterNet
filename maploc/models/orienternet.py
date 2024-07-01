@@ -243,7 +243,7 @@ class OrienterNet(BaseModel):
         if self.map_encoder is not None:
             assert "semantic_map" in data
             pred["semantic_map"] = self.map_encoder(
-                {"map": data["semantic_map"], "scale_idx": data["scale_idx"]}
+                {"map": data["semantic_map"], "scale_idx": data.get("scale_idx")}
             )
             feature_maps.append(pred["semantic_map"]["map_features"][0])
         if self.aerial_encoder is not None:
@@ -314,9 +314,13 @@ class OrienterNet(BaseModel):
                 )
             valid_bev = torch.rot90(valid_bev, 1, dims=(-2, -1))
 
-            template_sampler = self.bev_mapper.template_sampler[
-                str(int(data["z_max"][0][0].item()))
-            ]
+            if "z_max" in data:  # particular depth selected for multiscale
+                template_sampler = self.bev_mapper.template_sampler[
+                    str(int(data["z_max"][0][0].item()))
+                ]
+            else:
+                template_sampler = self.bev_mapper.template_sampler
+
             # template_sampler = self.bev_mapper.template_sampler
             scores = self.exhaustive_voting(
                 template_sampler, f_bev, f_map, valid_bev, confidence_bev
@@ -345,7 +349,13 @@ class OrienterNet(BaseModel):
             yaw_avg = 180 - uvr_avg[..., 2][..., None]
             map_T_cam_max = Transform2D.from_degrees(yaw_max, ij_max)
             map_T_cam_avg = Transform2D.from_degrees(yaw_avg, ij_avg)
-            resolution = 1 / data["bev_ppm"].float()  # self.conf.pixel_per_meter
+
+            if "scale_idx" in data:
+                idx = data["scale_idx"][0].item()
+                bev_ppm = self.conf.pixel_per_meter[idx].float()
+            else:
+                bev_ppm = self.conf.pixel_per_meter
+            resolution = 1 / bev_ppm  # self.conf.pixel_per_meter
             tile_T_cam_max = Transform2D.from_pixels(map_T_cam_max, resolution)
             tile_T_cam_avg = Transform2D.from_pixels(map_T_cam_avg, resolution)
 

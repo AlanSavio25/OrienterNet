@@ -12,7 +12,7 @@ class MLP(BaseModel):
         "layers": [],  # outputdim for each layer
         "apply_input_activation": True,
         "input_dim": "???",
-        "output_dim": "???",
+        # "output_dim": "???",
     }
 
     def _init(self, conf):
