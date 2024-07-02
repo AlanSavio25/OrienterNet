@@ -94,12 +94,17 @@ def evaluate_single_image_chain(
                 pred = model(batch)
                 preds.append(pred)
                 batches.append(batch)
-
         else:
-
-            for model in enumerate(models):
+            for model in models:
                 # batch_["scale_idx"] = torch.tensor([scale_idx])
-                batch = model.transfer_batch_to_device(batch_, model.device, i)
+                scale_idx = list(batch_["bev_ppm"].values()).index(
+                    model.model.conf.bev_mapper.pixel_per_meter
+                )
+                batch_["scale_idx"] = torch.tensor([scale_idx])
+                batch = model.transfer_batch_to_device(
+                    deepcopy(batch_), model.device, i
+                )
+                del batch["scale_idx"], batch["z_max"]  # , batch["bev_ppm"]
                 pred = model(batch)
                 preds.append(pred)
                 batches.append(batch)
@@ -112,6 +117,7 @@ def evaluate_single_image_chain(
             ).moveaxis(-3, -1)
             for score in scores
         ]
+
         log_probs = [log_softmax_spatial(score) for score in scores]
         log_probs_chained = log_softmax_spatial(torch.stack(log_probs).sum(0))
 

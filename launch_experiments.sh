@@ -602,4 +602,30 @@ python -m maploc.train experiment.name=$EXPERIMENT_NAME \
 #         training.lr=5e-5 \
 #         training.trainer.max_steps=320000
 
+# 10_7 => MULTISCALE model. Split image features, Map (pyramid)
+# EXPERIMENT_NAME="10_8_snap_multiscale_test"
+# python -m maploc.train experiment.name=$EXPERIMENT_NAME \
+#         data.tiles_filename=tiles.pkl \
+#         data.return_multiscale=True \
+#         data.crop_size_meters=[64,128,160] \
+#         data.max_init_error=[48,96,96] \
+#         data.pixel_per_meter=2 \
+#         data.mask_pad=[1,2,4] \
+#         model.map_encoder.backbone.output_scales=[0,1,1] \
+#         model.map_encoder.max_pool_ksize=[1,1,2] \
+#         model.bev_mapper.image_encoder.backbone.encoder=resnet18 \
+#         model.bev_mapper.image_encoder.backbone.output_dim=256 \
+#         model.bev_mapper.feature_map_split_idx=[0,1,1] \
+#         model.pixel_per_meter=[2.0,1.0,0.5] \
+#         model.bev_mapper.grid_cell_size=[0.5,1,2] \
+#         model.bev_mapper.x_max=[32.0,64.0,128.0] \
+#         model.bev_mapper.z_max=[32.0,64.0,128.0] \
+#         model.bev_mapper.bev_net.num_blocks=0 \
+#         model.bev_mapper.bev_net.mlp.layers=[256,128] \
+#         model.bev_mapper.bev_net.mlp.input_dim=128 \
+#         training.lr=5e-5 \
+#         training.trainer.max_steps=320000
+
+
+
 exit 0

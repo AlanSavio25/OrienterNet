@@ -69,8 +69,8 @@ model:
       output_dim: ${...matching_dim}
       confidence: true
       mlp:
-        layers:
-        input_dim:
+        # layers:
+        # input_dim:
   ransac_matcher: false
   chop_bev: false
   normalize_features: false

@@ -179,7 +179,11 @@ class GenericModule(pl.LightningModule):
                     scale_idx = batch.get("scale_idx")[0].item()
                 else:
                     scale_idx = 1 if len(self.cfg.model.bev_mapper.z_max) > 1 else 0 # Fixed for validation
-            z_max = self.cfg.model.bev_mapper.z_max[scale_idx]
+            if isinstance(self.cfg.model.bev_mapper.z_max, (int, float)):
+                # this is for backward compatibility. terrible code, needs to be fixed.
+                z_max = self.cfg.model.bev_mapper.z_max
+            else:
+                z_max = self.cfg.model.bev_mapper.z_max[scale_idx]
             batch["scale_idx"] = torch.tensor(scale_idx).unsqueeze(0)
             keys = [
                 "map_mask",
