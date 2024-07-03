@@ -152,10 +152,8 @@ class OrienterNet(BaseModel):
         feature_maps = []
         if self.map_encoder is not None:
             assert "semantic_map" in data
-            pred["semantic_map"] = self.map_encoder(
-                {"map": data["semantic_map"]}
-            )
-            feature_maps.append(pred["semantic_map"]["map_features"]) # [0]
+            pred["semantic_map"] = self.map_encoder({"map": data["semantic_map"]})
+            feature_maps.append(pred["semantic_map"]["map_features"])  # [0]
 
         # todo: update aerial
         if self.aerial_encoder is not None:
@@ -275,7 +273,8 @@ class OrienterNet(BaseModel):
         # Revert refactored outputs to original. TODO: update sample_xyr
         for k in self.conf.bev_mapper.z_max:
             ij_gt = Transform2D.to_pixels(
-                data["tile_T_cam"][k], 1 / data["bev_ppm"][k].float()  # self.conf.pixel_per_meter
+                data["tile_T_cam"][k],
+                1 / data["bev_ppm"][k].float(),  # self.conf.pixel_per_meter
             ).t
             uv_gt = ij_gt.clone()
             uv_gt = torch.flip(ij_gt, dims=[-1])
@@ -293,7 +292,7 @@ class OrienterNet(BaseModel):
                     yaw_gt,
                     self.conf.sigma_xy / self.conf.pixel_per_meter,
                     self.conf.sigma_r,
-                    mask=map_mask[k]
+                    mask=map_mask[k],
                 )
             else:
                 nll = nll_loss_xyr(log_probs, uv_gt, yaw_gt)
@@ -311,16 +310,24 @@ class OrienterNet(BaseModel):
         metrics = {}
         scales = self.conf.bev_mapper.z_max
         for s in scales:
-            metrics.update({
-            f"exhaustive_entropy_{int(s)}": ExhaustiveEntropy("log_probs", s),
-            f"xy_max_error_{int(s)}": Location2DError("tile_T_cam_max", s),
-            f"yaw_max_error_{int(s)}": AngleError("tile_T_cam_max", s),
-            f"xy_recall_02m_{int(s)}": Location2DRecall(2.0, "tile_T_cam_max", s),
-            f"xy_recall_05m_{int(s)}": Location2DRecall(5.0, "tile_T_cam_max", s),
-            f"xy_recall_10m_{int(s)}": Location2DRecall(10.0, "tile_T_cam_max", s),
-            f"yaw_recall_02°_{int(s)}": AngleRecall(2.0, "tile_T_cam_max", s),
-            f"yaw_recall_05°_{int(s)}": AngleRecall(5.0, "tile_T_cam_max", s),
-            f"yaw_recall_10°_{int(s)}": AngleRecall(10.0, "tile_T_cam_max", s),
-            })
+            metrics.update(
+                {
+                    f"exhaustive_entropy_{int(s)}": ExhaustiveEntropy("log_probs", s),
+                    f"xy_max_error_{int(s)}": Location2DError("tile_T_cam_max", s),
+                    f"yaw_max_error_{int(s)}": AngleError("tile_T_cam_max", s),
+                    f"xy_recall_02m_{int(s)}": Location2DRecall(
+                        2.0, "tile_T_cam_max", s
+                    ),
+                    f"xy_recall_05m_{int(s)}": Location2DRecall(
+                        5.0, "tile_T_cam_max", s
+                    ),
+                    f"xy_recall_10m_{int(s)}": Location2DRecall(
+                        10.0, "tile_T_cam_max", s
+                    ),
+                    f"yaw_recall_02°_{int(s)}": AngleRecall(2.0, "tile_T_cam_max", s),
+                    f"yaw_recall_05°_{int(s)}": AngleRecall(5.0, "tile_T_cam_max", s),
+                    f"yaw_recall_10°_{int(s)}": AngleRecall(10.0, "tile_T_cam_max", s),
+                }
+            )
 
         return metrics
