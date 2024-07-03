@@ -179,7 +179,7 @@ class BEVMapper(BaseModel):
     def _init(self, conf):
 
         Encoder = get_model(conf.image_encoder.get("name", "feature_extractor_v2"))
-        self.image_encoder = Encoder(conf.image_encoder.backbone)
+        self.image_encoder = Encoder(conf.image_encoder.backbone)  # 12M params
         ppm = conf.pixel_per_meter
 
         if not conf.multiscale:
@@ -228,9 +228,15 @@ class BEVMapper(BaseModel):
         if conf.mode == "inverse":
             if conf.feature_depth_fusion == "mlp":
                 # Fuse feature and depth score to predict a new feature
-                self.fusion_mlp = MLP(
-                    conf.fusion_mlp
-                )  # input_dim: feat_dim+score, out:feat_dim
+                if not conf.multiscale:
+                    self.fusion_mlp = MLP(
+                        conf.fusion_mlp
+                    )  # input_dim: feat_dim+score, out:feat_dim
+                else:
+                    self.fusion_mlp = torch.nn.ModuleDict(
+                        {str(int(z)): MLP(conf.fusion_mlp) for z in conf.z_max}
+                    )  # 66k params
+
             # TODO: rename z_max to max_depth?
 
             if not conf.multiscale:
@@ -267,13 +273,33 @@ class BEVMapper(BaseModel):
                 'inverse' (SNAP). Got: {self.conf.mode}"
             )
 
-        if conf.scale_classifier == "linear" or conf.mode == "forward":
-            self.scale_classifier = torch.nn.Linear(
-                conf.latent_dim, conf.num_scale_bins
-            )
-        elif conf.scale_classifier == "mlp":
-            assert conf.scale_mlp is not None
-            self.scale_classifier = MLP(conf.scale_mlp)
+        if not conf.multiscale:
+
+            if conf.scale_classifier == "linear" or conf.mode == "forward":
+                self.scale_classifier = torch.nn.Linear(
+                    conf.latent_dim, conf.num_scale_bins
+                )
+            elif conf.scale_classifier == "mlp":
+                assert conf.scale_mlp is not None
+                self.scale_classifier = MLP(conf.scale_mlp)
+        else:
+            if conf.scale_classifier == "linear" or conf.mode == "forward":
+                self.scale_classifier = torch.nn.ModuleDict(
+                    {
+                        str(int(z)): torch.nn.Linear(
+                            conf.latent_dim, conf.num_scale_bins
+                        )
+                        for z in conf.z_max
+                    }
+                )
+            elif conf.scale_classifier == "mlp":
+                assert conf.scale_mlp is not None
+                self.scale_classifier = torch.nn.ModuleDict(
+                    {
+                        str(int(z)): MLP(conf.scale_mlp)  # 4257 params
+                        for z in conf.z_max
+                    }
+                )
 
         self.vertical_pooling = VerticalPooling({"pooling": conf.vertical_pooling})
         if conf.bev_net is None:
@@ -284,7 +310,9 @@ class BEVMapper(BaseModel):
             else:
                 # The z_max configuration indicates that we are generating multiple BEVs
                 self.bev_net = torch.nn.ModuleDict(
-                    {str(int(z)): BEVNet(conf.bev_net) for z in conf.z_max}
+                    {
+                        str(int(z)): BEVNet(conf.bev_net) for z in conf.z_max
+                    }  # 72k params
                 )
 
         if conf.bev_net is None:
@@ -306,11 +334,12 @@ class BEVMapper(BaseModel):
         camera = camera.to(data["image"].device, non_blocking=True)
 
         # when multiscale, the scale classifier processes both sets of features to produce scales.
-        pred["pixel_scales"] = scales = self.scale_classifier(
-            f_image.moveaxis(1, -1)
-        )  # if snap, then this should be an mlp
 
         if self.conf.mode == "forward":
+
+            pred["pixel_scales"] = scales = self.scale_classifier(
+                f_image.moveaxis(1, -1)
+            )  # if snap, then this should be an mlp
 
             # Map image columns to polar ray features
             f_polar = self.projection_polar(f_image, scales, camera)
@@ -359,6 +388,16 @@ class BEVMapper(BaseModel):
 
             # Iterate through xy grids for each BEV
             for idx, k in enumerate(self.conf.z_max):
+
+                pred.setdefault("pixel_scales", {})[k] = scales = self.scale_classifier[
+                    str(int(k))
+                ](
+                    f_image[
+                        :,
+                        idx * self.conf.latent_dim : (idx + 1) * self.conf.latent_dim,
+                        ...,
+                    ].moveaxis(1, -1)
+                )  # if snap, then this should be an mlp
 
                 xy = self.cam_xy_pts[k]
                 if len(xy.shape) != 4:
@@ -431,7 +470,7 @@ class BEVMapper(BaseModel):
 
                 if self.conf.feature_depth_fusion == "mlp":  # like snap
                     # as in SNAP: X = MLP([f_proj, score]). Then, vertical pool to get M = max X
-                    f_grid = self.fusion_mlp(
+                    f_grid = self.fusion_mlp[str(int(k))](
                         torch.cat([f_proj, scores_proj[..., None]], dim=-1)
                     )
                 elif self.conf.feature_depth_fusion == "softmax":  # like orienternet
@@ -490,7 +529,7 @@ class BEVMapper(BaseModel):
                     pred_bev = pred["bev"][k] = self.bev_net[str(int(k))](
                         {"input": f_bev.moveaxis(-1, 1)}
                     )
-                    f_bev = pred_bev["output"]
+                    # f_bev = pred_bev["output"]
 
                 pred["bev"][k]["valid_bev"] = valid_bev
 

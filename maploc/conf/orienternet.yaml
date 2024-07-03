@@ -45,8 +45,8 @@ model:
       layers:
         - ${...num_scale_bins}
       apply_input_activation: true
-      input_dim: ${..image_encoder.backbone.output_dim}
-      # input_dim: ${...latent_dim}
+      # input_dim: ${..image_encoder.backbone.output_dim}
+      input_dim: ${...latent_dim}
     fusion_mlp: # fuses feature with depth score
       activation: ReLU
       layers:

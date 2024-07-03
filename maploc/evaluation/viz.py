@@ -310,7 +310,7 @@ def plot_example_single(
             )
             write_torch_image(p.format("image").replace("pdf", "jpg"), image.numpy())
 
-        scales_scores = pred["pixel_scales"]  # [..., 2:-7]
+        scales_scores = pred["pixel_scales"][k]  # [..., 2:-7]
         # max_depth = model.model.conf.bev_mapper.z_max
         z_max = k
         if z_max == 256.0:
