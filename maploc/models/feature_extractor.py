@@ -66,6 +66,7 @@ class AdaptationBlock(nn.Sequential):
 class FeatureExtractor(BaseModel):
     default_conf = {
         "pretrained": True,
+        "max_pool_ksize": 1,
         "input_dim": 3,
         "output_scales": [0, 2, 4],  # what scales to adapt and output
         "output_dim": 128,  # # of channels in output feature maps
@@ -198,6 +199,15 @@ class FeatureExtractor(BaseModel):
         self.adaptation = nn.ModuleList(adaptation)
         self.scales = [2**s for s in conf.output_scales]
 
+        # Pool Layers
+        pool = []
+        for ksize in conf.max_pool_ksize:
+            if ksize > 1:
+                pool.append(nn.MaxPool2d(ksize))
+            else:
+                pool.append(nn.Identity())
+        self.pool = nn.ModuleList(pool)
+
     def _forward(self, data):
         image = data["image"]
         if self.conf.pretrained:
@@ -220,12 +230,13 @@ class FeatureExtractor(BaseModel):
 
         out_features = []
         out_scales = self.conf.output_scales
-        # TODO: remove this temporary backward compatibility
-        if len(out_scales) > 1:
-            out_scales = [self.conf.output_scales[data["scale_idx"][0].item()]]
 
-        for adapt, i in zip(self.adaptation, out_scales):
-            out_features.append(adapt(pre_features[i]))
+        # We always have a single output map (single scale) per forward pass
+        out_scales = [out_scales[data["out_scale_idx"]]]
+        pools = [self.pool[data["out_scale_idx"]]]
+
+        for adapt, pool, i in zip(self.adaptation, pools, out_scales):
+            out_features.append(adapt(pool(pre_features[i])))
         pred = {"feature_maps": out_features, "skip_features": skip_features}
         return pred
 
