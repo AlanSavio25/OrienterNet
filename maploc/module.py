@@ -170,6 +170,8 @@ class GenericModule(pl.LightningModule):
         if isinstance(
             batch["pixels_per_meter"], dict
         ):  # TODO: this needs to be something else
+            if self.cfg.model.multiscale:
+                return super().transfer_batch_to_device(batch, device, dataloader_idx)
             if self.training:
                 scale_idx = int(
                     np.random.choice(np.arange(len(self.cfg.model.bev_mapper.z_max)))
