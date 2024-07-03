@@ -12,11 +12,9 @@ class MapEncoder(BaseModel):
     default_conf = {
         "embedding_dim": "???",
         "output_dim": None,
-        "scale_factor": None,
         "num_classes": "???",
         "backbone": "???",
         "unary_prior": False,
-        "max_pool_ksize": None,
     }
 
     def _init(self, conf):
@@ -52,33 +50,23 @@ class MapEncoder(BaseModel):
             )
 
     def _forward(self, data):
-        embeddings = [
-            self.embeddings[k](data["map"][:, i])
-            for i, k in enumerate(("areas", "ways", "nodes"))
-        ]
-        embeddings = torch.cat(embeddings, dim=-1).permute(0, 3, 1, 2)
-        if isinstance(self.encoder, BaseModel):
-            features = self.encoder(
-                {"image": embeddings, "scale_idx": data.get("scale_idx")}
-            )["feature_maps"]
-        else:
-            features = [self.encoder(embeddings)]
-
-        if self.conf.scale_factor:
-            scale_factor = self.conf.scale_factor[data["scale_idx"].item()]
-            if scale_factor != 1:
-                features = [
-                    interpolate(f, scale_factor=scale_factor, mode="bilinear")
-                    for f in features
+        pred = {"map_features": {}}
+        for idx, k in enumerate(data["map"]):
+            embeddings = [
+                self.embeddings[key](data["map"][k][:, i])
+                for i, key in enumerate(("areas", "ways", "nodes"))
+            ]
+            embeddings = torch.cat(embeddings, dim=-1).permute(0, 3, 1, 2)
+            if isinstance(self.encoder, BaseModel):
+                features = self.encoder({"image": embeddings, "out_scale_idx": idx})[
+                    "feature_maps"
                 ]
-        if self.conf.max_pool_ksize:
-            kernel_size = self.conf.max_pool_ksize[data["scale_idx"].item()]
-            if kernel_size > 1:
-                features = [nn.MaxPool2d(kernel_size)(f) for f in features]
-        pred = {}
-        if self.conf.unary_prior:
-            pred["log_prior"] = [f[:, -1] for f in features]
-            features = [f[:, :-1] for f in features]
+            else:
+                features = [self.encoder(embeddings)]
 
-        pred["map_features"] = features
+            if self.conf.unary_prior:
+                pred.setdefault("log_prior", {})[k] = [f[:, -1] for f in features]
+                features = [f[:, :-1] for f in features]
+
+            pred["map_features"][k] = features
         return pred

@@ -153,6 +153,7 @@ class BEVMapper(BaseModel):
 
     default_conf = {
         "image_encoder": "???",
+        "multiscale": False,
         "scale_classifier": "linear",  # or 'mlp'
         "scale_mlp": None,
         "fusion_mlp": None,  # only for "inverse" mode
@@ -180,12 +181,8 @@ class BEVMapper(BaseModel):
         Encoder = get_model(conf.image_encoder.get("name", "feature_extractor_v2"))
         self.image_encoder = Encoder(conf.image_encoder.backbone)
         ppm = conf.pixel_per_meter
-        z_max = conf.z_max
-        # if isinstance(z_max, (float, int)):
-        #     z_max = [z_max]
 
-        # TODO: remove this condition by simply [z_max] when it is int/float. Keep for now for loading old models
-        if isinstance(conf.z_max, (float, int)):
+        if not conf.multiscale:
             self.projection_polar = PolarProjectionDepth(
                 conf.z_max, ppm, conf.scale_range, conf.z_min
             )
@@ -205,7 +202,7 @@ class BEVMapper(BaseModel):
                         conf.scale_range,
                         conf.z_min,
                     )
-                    for i, z in enumerate(z_max)
+                    for i, z in enumerate(conf.z_max)
                 }
             )
             self.projection_bev = torch.nn.ModuleDict(
@@ -213,7 +210,7 @@ class BEVMapper(BaseModel):
                     str(int(z)): CartesianProjection(
                         conf.z_max[i], conf.x_max[i], ppm[i], conf.z_min
                     )
-                    for i, z in enumerate(z_max)
+                    for i, z in enumerate(conf.z_max)
                 }
             )
 
@@ -224,7 +221,7 @@ class BEVMapper(BaseModel):
                         ppm[i],
                         conf.num_rotations,
                     )
-                    for i, z in enumerate(z_max)
+                    for i, z in enumerate(conf.z_max)
                 }
             )
 
@@ -236,7 +233,7 @@ class BEVMapper(BaseModel):
                 )  # input_dim: feat_dim+score, out:feat_dim
             # TODO: rename z_max to max_depth?
 
-            if isinstance(conf.z_max, (float, int)):
+            if not conf.multiscale:
                 self.grid, self.grid_t_cam, self.cam_xy_pts, self.grid_xy_pts = (
                     build_frustum_grid(
                         cell_size=conf.grid_cell_size,
@@ -252,7 +249,7 @@ class BEVMapper(BaseModel):
                     {},
                     {},
                 )
-                for i, z in enumerate(z_max):
+                for i, z in enumerate(conf.z_max):
                     (
                         self.grid[z],
                         self.grid_t_cam[z],
@@ -279,8 +276,17 @@ class BEVMapper(BaseModel):
             self.scale_classifier = MLP(conf.scale_mlp)
 
         self.vertical_pooling = VerticalPooling({"pooling": conf.vertical_pooling})
+        if conf.bev_net is None:
+            self.bev_net = None
+        else:
+            if not conf.multiscale:
+                self.bev_net = BEVNet(conf.bev_net)
+            else:
+                # The z_max configuration indicates that we are generating multiple BEVs
+                self.bev_net = torch.nn.ModuleDict(
+                    {str(int(z)): BEVNet(conf.bev_net) for z in conf.z_max}
+                )
 
-        self.bev_net = None if conf.bev_net is None else BEVNet(conf.bev_net)
         if conf.bev_net is None:
             self.feature_projection = torch.nn.Linear(
                 conf.latent_dim, conf.matching_dim
@@ -290,14 +296,16 @@ class BEVMapper(BaseModel):
 
     def _forward(self, data):
 
-        pred = {}
+        pred = {"bev": {}, "valid_bev": {}}
 
         # Extract image features.
         level = 0
+        # when multiscale, f_image will produce 256 dims.
         f_image = self.image_encoder(data)["feature_maps"][level]
         camera = data["camera"].scale(1 / self.image_encoder.scales[level])
         camera = camera.to(data["image"].device, non_blocking=True)
 
+        # when multiscale, the scale classifier processes both sets of features to produce scales.
         pred["pixel_scales"] = scales = self.scale_classifier(
             f_image.moveaxis(1, -1)
         )  # if snap, then this should be an mlp
@@ -348,136 +356,143 @@ class BEVMapper(BaseModel):
 
             # cam_xy_pts are 2d grid points centered around the camera
             # grid_xy_pts are 2d grid points centered at the bev origin
-            if isinstance(self.cam_xy_pts, dict):
-                xy = self.cam_xy_pts[data["z_max"][0][0].item()]  # h,w,2
-            else:
-                xy = self.cam_xy_pts
 
-            if len(xy.shape) != 4:
-                xy = xy[None].repeat_interleave(tile_T_cam.shape[0], dim=0)
+            # Iterate through xy grids for each BEV
+            for idx, k in enumerate(self.conf.z_max):
 
-            z_offset = -torch.tensor(4)
-            # Add noise to the z_offset
-            if self.conf.grid_z_offset_range is not None:
-                z_min, z_max = self.conf.grid_z_offset_range  # -2, +2
-                z_offset = z_offset + (
-                    torch.rand(1).squeeze() * (z_max - z_min) + z_min
+                xy = self.cam_xy_pts[k]
+                if len(xy.shape) != 4:
+                    xy = xy[None].repeat_interleave(tile_T_cam[k].shape[0], dim=0)
+
+                z_offset = -torch.tensor(4)  # Set the camera at height = 4m
+
+                # Add noise to camera height
+                if self.conf.grid_z_offset_range is not None:
+                    z_min, z_max = self.conf.grid_z_offset_range  # -2, +2
+                    z_offset = z_offset + (
+                        torch.rand(1).squeeze() * (z_max - z_min) + z_min
+                    )
+
+                # 2D Grid -> 3D Grid
+                grid_height = self.conf.grid_height
+                z_delta = 0.5
+                z = torch.arange(0, grid_height, z_delta) + z_offset + z_delta / 2
+                xy, z = torch.broadcast_tensors(
+                    xy[:, :, :, None, :], z[None, None, None, :, None]
+                )
+                xyz = torch.cat([xy, z[..., :1]], dim=-1).to(camera.device)
+
+                grid_shape = xyz.shape[:-1]
+                xyz_flat = xyz.reshape(len(xyz), -1, 3)  # B, N=129x64x24, 3
+
+                # Compute the locations of 2D observations in camera view for all points
+                p2d_view, visible, depth, _ = project_points_to_view(
+                    cam_R_gcam, camera._data, xyz_flat
                 )
 
-            grid_height = self.conf.grid_height
-            z_delta = 0.5
-            z = torch.arange(0, grid_height, z_delta) + z_offset + z_delta / 2
-            xy, z = torch.broadcast_tensors(
-                xy[:, :, :, None, :], z[None, None, None, :, None]
-            )
-            xyz = torch.cat([xy, z[..., :1]], dim=-1).to(camera.device)
+                # Plot projected points on image
+                # image = torch.nn.functional.interpolate(data['image'],scale_factor=0.5,mode='bilinear')[0].permute(1, 2, 0).cpu().numpy()
+                # import matplotlib.pyplot as plt
+                # p2d_view_np = p2d_view[0][visible[0]].clone().cpu().numpy()
+                # plt.imshow(image)
+                # plt.scatter(p2d_view_np[:, 1], p2d_view_np[:, 0], s=1, c='red')
+                # plt.axis('off')
+                # plt.savefig('image_with_visible_points.png')
 
-            grid_shape = xyz.shape[:-1]
-            xyz_flat = xyz.reshape(len(xyz), -1, 3)  # B, N=129x64x24, 3
-
-            # Compute the locations of 2D observations in camera view for all points
-            p2d_view, visible, depth, _ = project_points_to_view(
-                cam_R_gcam, camera._data, xyz_flat
-            )
-
-            # Plot projected points on image
-            # image = torch.nn.functional.interpolate(data['image'],
-            #                                         scale_factor=0.5,
-            #                                         mode='bilinear'
-            #                                         )[0].permute(1, 2, 0).cpu().numpy()
-            # import matplotlib.pyplot as plt
-            # p2d_view_np = p2d_view[0][visible[0]].clone().cpu().numpy()
-            # plt.imshow(image)
-            # plt.scatter(p2d_view_np[:, 1], p2d_view_np[:, 0], s=1, c='red')
-            # plt.axis('off')
-            # plt.savefig('image_with_visible_points.png')
-
-            # Concat image features with scale scores and then interpolate
-            f_proj = interpolate_features(
-                torch.cat([f_image, scales.moveaxis(-1, -3)], 1), p2d_view
-            )
-            f_proj = f_proj.moveaxis(-1, -2)
-            f_proj, scores_scales = f_proj.split(self.conf.latent_dim, dim=-1)
-
-            # d_min_max = torch.tensor([self.conf.z_min, self.conf.z_max]).to(scores_scales)
-            # scores_proj = interpolate_depth_scores(scores_scales, depth, d_min_max).moveaxis(1,0)
-            s_min_max = torch.tensor(self.conf.scale_range).to(scores_scales)
-            scores_proj = interpolate_scale_scores(
-                scores_scales, depth, s_min_max, data["camera"]._data
-            ).moveaxis(1, 0)
-            scores_proj = scores_proj.moveaxis(-1, -2)
-
-            grid_shape = (-1, *xyz.shape[-4:-1])
-
-            if self.conf.feature_depth_fusion == "mlp":  # like snap
-                # as in SNAP: X = MLP([f_proj, score]). Then, vertical pool to get M = max X
-                f_grid = self.fusion_mlp(
-                    torch.cat([f_proj, scores_proj[..., None]], dim=-1)
+                # Interpolate image feat and scale score at projected points
+                f_proj = interpolate_features(
+                    torch.cat(
+                        [
+                            f_image[
+                                :,
+                                idx
+                                * self.conf.latent_dim : (idx + 1)
+                                * self.conf.latent_dim,
+                                ...,
+                            ],
+                            scales.moveaxis(-1, -3),
+                        ],
+                        1,
+                    ),
+                    p2d_view,
                 )
-            elif self.conf.feature_depth_fusion == "softmax":  # like orienternet
-                scores_proj = scores_proj.reshape(*grid_shape, 1)
-                vertical_softmax = torch.nn.Softmax(dim=-2)(scores_proj).reshape(
-                    f_proj.shape[:-1]
-                )
-                f_grid = f_proj * vertical_softmax[..., None]
-                # these features can now be vertically pooled using mean
+                f_proj = f_proj.moveaxis(-1, -2)
+                f_proj, scores_scales = f_proj.split(self.conf.latent_dim, dim=-1)
 
-            f_grid = torch.where(visible[..., None], f_grid, 0)
+                # d_min_max = torch.tensor([self.conf.z_min, self.conf.z_max]).to(scores_scales)
+                # scores_proj = interpolate_depth_scores(scores_scales, depth, d_min_max).moveaxis(1,0)
+                s_min_max = torch.tensor(self.conf.scale_range).to(scores_scales)
+                scores_proj = interpolate_scale_scores(
+                    scores_scales, depth, s_min_max, data["camera"]._data
+                ).moveaxis(1, 0)
+                scores_proj = scores_proj.moveaxis(-1, -2)
 
-            # Reshape to 3D volume
-            f_grid = f_grid.reshape(*grid_shape, f_grid.shape[-1])
-            valid = visible.reshape(grid_shape)
+                grid_shape = (-1, *xyz.shape[-4:-1])
 
-            bev = self.vertical_pooling({"features": f_grid, "valid": valid})
-            f_bev, valid_bev = bev["features"], bev["valid"]
+                if self.conf.feature_depth_fusion == "mlp":  # like snap
+                    # as in SNAP: X = MLP([f_proj, score]). Then, vertical pool to get M = max X
+                    f_grid = self.fusion_mlp(
+                        torch.cat([f_proj, scores_proj[..., None]], dim=-1)
+                    )
+                elif self.conf.feature_depth_fusion == "softmax":  # like orienternet
+                    scores_proj = scores_proj.reshape(*grid_shape, 1)
+                    vertical_softmax = torch.nn.Softmax(dim=-2)(scores_proj).reshape(
+                        f_proj.shape[:-1]
+                    )
+                    f_grid = f_proj * vertical_softmax[..., None]
+                    # these features can now be vertically pooled using mean
 
-            # Enforce a BEV shape of [129,64].
-            # This allows us to generate a finer larger BEV and then downsample for memory efficiency
-            # idx = data["scale_idx"][0].item() # pick first from batch
-            if "scale_idx" in data:
-                idx = data["scale_idx"][0].item()
+                f_grid = torch.where(visible[..., None], f_grid, 0)
+
+                # Reshape to 3D volume
+                f_grid = f_grid.reshape(*grid_shape, f_grid.shape[-1])
+                valid = visible.reshape(grid_shape)
+
+                bev = self.vertical_pooling({"features": f_grid, "valid": valid})
+                f_bev, valid_bev = bev["features"], bev["valid"]
+
+                # Enforce a BEV shape of [129,64], regardless of grid resolution.
+                # This allows us to generate a finer larger BEV and then downsample for memory efficiency
                 grid_cell_size = self.conf.grid_cell_size[idx]
                 pixel_per_meter = self.conf.pixel_per_meter[idx]
                 x_max = self.conf.x_max[idx]
                 z_max = self.conf.z_max[idx]
-            else:
-                grid_cell_size = self.conf.grid_cell_size
-                pixel_per_meter = self.conf.pixel_per_meter
-                x_max = self.conf.x_max
-                z_max = self.conf.z_max
 
-            if grid_cell_size != 1 / pixel_per_meter:
-                h = int((x_max * 2 * pixel_per_meter) + 1)
-                w = int(z_max * pixel_per_meter)
-                f_bev = torch.nn.functional.interpolate(
-                    f_bev.moveaxis(-1, -3),
-                    size=(h, w),
-                    mode="bilinear",
-                    align_corners=False,
-                ).moveaxis(-3, -1)
-                nan_mask = torch.where(valid_bev, 0, torch.nan)
-                nan_mask = torch.nn.functional.interpolate(
-                    nan_mask.unsqueeze(1),
-                    size=(h, w),
-                    mode="bilinear",
-                    align_corners=False,
-                ).squeeze(1)
-                valid_bev = ~torch.isnan(nan_mask)
+                if grid_cell_size != 1 / pixel_per_meter:
+                    h = int((x_max * 2 * pixel_per_meter) + 1)
+                    w = int(z_max * pixel_per_meter)
+                    f_bev = torch.nn.functional.interpolate(
+                        f_bev.moveaxis(-1, -3),
+                        size=(h, w),
+                        mode="bilinear",
+                        align_corners=False,
+                    ).moveaxis(-3, -1)
+                    nan_mask = torch.where(valid_bev, 0, torch.nan)
+                    nan_mask = torch.nn.functional.interpolate(
+                        nan_mask.unsqueeze(1),
+                        size=(h, w),
+                        mode="bilinear",
+                        align_corners=False,
+                    ).squeeze(1)
+                    valid_bev = ~torch.isnan(nan_mask)
 
-            assert list(f_bev.shape[-3:-1]) == [129, 64] == list(valid_bev.shape[-2:])
+                assert (
+                    list(f_bev.shape[-3:-1]) == [129, 64] == list(valid_bev.shape[-2:])
+                )
 
-            # Forward pooled BEV features through BEV Net
-            # SNAP doesn't use a bev_net. Worth checking if it helps
-            if self.conf.bev_net is None:
-                # channel last -> classifier -> channel first
-                f_bev = self.feature_projection(f_bev).moveaxis(-1, 1)
-                pred["bev"] = {"output": f_bev}
-            else:
-                pred_bev = pred["bev"] = self.bev_net({"input": f_bev.moveaxis(-1, 1)})
+                # BEV features through BEV Net
+                # SNAP doesn't use a bev_net, but the confidence is useful especially when looking further away
+                if self.conf.bev_net is None:
+                    # channel last -> classifier -> channel first
+                    f_bev = self.feature_projection(f_bev).moveaxis(-1, 1)
+                    pred["bev"][k] = {"output": f_bev}
+                else:
+                    pred_bev = pred["bev"][k] = self.bev_net[str(int(k))](
+                        {"input": f_bev.moveaxis(-1, 1)}
+                    )
+                    f_bev = pred_bev["output"]
 
-                f_bev = pred_bev["output"]
-
-            pred["bev"]["valid_bev"] = valid_bev
+                pred["bev"][k]["valid_bev"] = valid_bev
 
         pred = {**pred, "features_image": f_image}
         return pred
