@@ -72,7 +72,7 @@ model:
       latent_dim: ${...latent_dim}
       output_dim: ${...matching_dim}
       confidence: true
-      mlp:
+      # mlp:
         # layers:
         # input_dim:
   ransac_matcher: false

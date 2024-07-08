@@ -309,11 +309,12 @@ class BEVMapper(BaseModel):
                 self.bev_net = BEVNet(conf.bev_net)
             else:
                 # The z_max configuration indicates that we are generating multiple BEVs
-                self.bev_net = torch.nn.ModuleDict(
-                    {
-                        str(int(z)): BEVNet(conf.bev_net) for z in conf.z_max
-                    }  # 72k params
-                )
+                self.bev_net = BEVNet(conf.bev_net)
+                # self.bev_net = torch.nn.ModuleDict(
+                #     {
+                #         str(int(z)): BEVNet(conf.bev_net) for z in conf.z_max
+                #     }  # 72k params
+                # )
 
         if conf.bev_net is None:
             self.feature_projection = torch.nn.Linear(
@@ -324,7 +325,7 @@ class BEVMapper(BaseModel):
 
     def _forward(self, data):
 
-        pred = {"bev": {}, "valid_bev": {}}
+        pred = {"bev": {}}
 
         # Extract image features.
         level = 0
@@ -396,7 +397,7 @@ class BEVMapper(BaseModel):
                         :,
                         idx * self.conf.latent_dim : (idx + 1) * self.conf.latent_dim,
                         ...,
-                    ].moveaxis(1, -1)
+                    ].moveaxis(-3, -1)
                 )  # if snap, then this should be an mlp
 
                 xy = self.cam_xy_pts[k]
@@ -526,9 +527,10 @@ class BEVMapper(BaseModel):
                     f_bev = self.feature_projection(f_bev).moveaxis(-1, 1)
                     pred["bev"][k] = {"output": f_bev}
                 else:
-                    pred_bev = pred["bev"][k] = self.bev_net[str(int(k))](
-                        {"input": f_bev.moveaxis(-1, 1)}
-                    )
+                    pred["bev"][k] = self.bev_net({"input": f_bev.moveaxis(-1, 1)})
+                    # pred["bev"][k] = self.bev_net[str(int(k))](
+                    #     {"input": f_bev.moveaxis(-1, 1)}
+                    # )
                     # f_bev = pred_bev["output"]
 
                 pred["bev"][k]["valid_bev"] = valid_bev

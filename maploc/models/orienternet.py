@@ -141,11 +141,15 @@ class OrienterNet(BaseModel):
 
     def _forward(self, data):
 
+        # NOTE: for random scale selection, selected choices should be
+        # forwarded through args and not through data.
+
         pred = {}
 
         # Predict BEV from image
         bev_mapper_pred = self.bev_mapper(data)
         pred.update({**bev_mapper_pred})
+        # TODO: just make this pred = self.bev_mapper(data)
 
         # Encode aerial/semantic maps
         # note: these maps are in memory layout
