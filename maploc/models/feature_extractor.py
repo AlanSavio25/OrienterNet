@@ -200,8 +200,12 @@ class FeatureExtractor(BaseModel):
         self.scales = [2**s for s in conf.output_scales]
 
         # Pool Layers
+        maxpool_ksizes = conf.max_pool_ksize
         pool = []
-        for ksize in conf.max_pool_ksize:
+        if isinstance(maxpool_ksizes, (int, float)):
+            maxpool_ksizes = [maxpool_ksizes]
+
+        for ksize in maxpool_ksizes:
             if ksize > 1:
                 pool.append(nn.MaxPool2d(ksize))
             else:

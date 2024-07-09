@@ -50,7 +50,8 @@ class MapEncoder(BaseModel):
             )
 
     def _forward(self, data):
-        pred = {"map_features": {}}
+        # pred = {"map_features": {}}
+        pred = {k: {} for k in data["map"]}
         for idx, k in enumerate(data["map"]):
             embeddings = [
                 self.embeddings[key](data["map"][k][:, i])
@@ -58,15 +59,15 @@ class MapEncoder(BaseModel):
             ]
             embeddings = torch.cat(embeddings, dim=-1).permute(0, 3, 1, 2)
             if isinstance(self.encoder, BaseModel):
-                features = self.encoder({"image": embeddings, "out_scale_idx": idx})[
+                features = self.encoder({"image": embeddings, "out_scale_idx": idx})[ # TODO: check this
                     "feature_maps"
                 ]
             else:
                 features = [self.encoder(embeddings)]
 
             if self.conf.unary_prior:
-                pred.setdefault("log_prior", {})[k] = [f[:, -1] for f in features]
+                pred[k]["log_prior"] = [f[:, -1] for f in features]
                 features = [f[:, :-1] for f in features]
 
-            pred["map_features"][k] = features
+            pred[k]["map_features"] = features
         return pred

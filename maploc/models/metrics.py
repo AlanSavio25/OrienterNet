@@ -27,11 +27,14 @@ class Location2DRecall(torchmetrics.MeanMetric):
         super().__init__(*args, **kwargs)
 
     def update(self, pred, data):
-        if isinstance(pred[self.key][self.subkey], Transform2D):
-            xy_p = pred[self.key][self.subkey].t
+        if self.subkey is not None:
+            xy_p = pred[self.subkey][self.key]
+            xy_gt = data["tile_T_cam"][self.subkey].t
         else:
-            xy_p = pred[self.key][self.subkey]
-        xy_gt = data["tile_T_cam"][self.subkey].t
+            xy_p = pred[self.key]
+            xy_gt = data["tile_T_cam"].t
+        if isinstance(xy_p, Transform2D):
+            xy_p = xy_p.t
         assert xy_gt.shape == xy_p.shape
         error = location_error(xy_p, xy_gt)
         super().update((error <= self.threshold).float())
@@ -45,9 +48,15 @@ class AngleRecall(torchmetrics.MeanMetric):
         super().__init__(*args, **kwargs)
 
     def update(self, pred, data):
-        error = angle_error(
-            pred[self.key][self.subkey].angle, data["tile_T_cam"][self.subkey].angle
-        )
+        if self.subkey is not None:
+            gt = data["tile_T_cam"][self.subkey].angle
+            p = pred[self.subkey][self.key].angle
+        else:
+            gt = data["tile_T_cam"].angle
+            p = pred[self.key].angle
+
+        
+        error = angle_error(p, gt)
         super().update((error <= self.threshold).float())
 
 
@@ -77,9 +86,10 @@ class ExhaustiveEntropy(MeanMetricWithRecall):
         super().__init__(*args, **kwargs)
 
     def update(self, pred, data):
-        log_probs = pred[self.key]
         if self.subkey is not None:
-            log_probs = log_probs[self.subkey]
+            log_probs = pred[self.subkey][self.key]
+        else:
+            log_probs = pred[self.key]
         probs = log_probs.exp()
         entropy = -torch.sum(probs * (probs + 1e-9).log())
         n = torch.prod(torch.tensor(probs.shape)).to(entropy)
@@ -90,32 +100,42 @@ class ExhaustiveEntropy(MeanMetricWithRecall):
 
 
 class AngleError(MeanMetricWithRecall):
-    def __init__(self, key, subkey):
+    def __init__(self, key, subkey=None):
         super().__init__()
         self.key = key
         self.subkey = subkey
 
     def update(self, pred, data):
+        if self.subkey is not None:
+            p = pred[self.subkey][self.key].angle
+            gt = data["tile_T_cam"][self.subkey]
+        else:
+            p = pred[self.key].angle
+            gt = data["tile_T_cam"]
+
         value = angle_error(
-            pred[self.key][self.subkey].angle, data["tile_T_cam"][self.subkey].angle
+            p, gt.angle
         )
         if value.numel():
             self.value.append(value)
 
 
 class Location2DError(MeanMetricWithRecall):
-    def __init__(self, key, subkey):
+    def __init__(self, key, subkey=None):
         super().__init__()
         self.key = key
         self.subkey = subkey
 
     def update(self, pred, data):
-        xy_gt = data["tile_T_cam"][self.subkey].t
-
-        if isinstance(pred[self.key][self.subkey], Transform2D):
-            xy_p = pred[self.key][self.subkey].t
+        if self.subkey is not None:
+            xy_gt = data["tile_T_cam"][self.subkey].t
+            xy_p = pred[self.subkey][self.key]
         else:
-            xy_p = pred[self.key][self.subkey]
+            xy_gt = data["tile_T_cam"].t
+            xy_p = pred[self.key]
+
+        if isinstance(xy_p, Transform2D):
+            xy_p = xy_p.t
 
         assert xy_gt.shape == xy_p.shape
         value = location_error(xy_p, xy_gt)
@@ -130,8 +150,9 @@ class LateralLongitudinalError(MeanMetricWithRecall):
         self.subkey = subkey
 
     def update(self, pred, data):
+        # TODO: if-else for subkey
         yaw = deg2rad(90 - data["tile_T_cam"][self.subkey].angle).squeeze(-1)
-        shift = pred[self.key][self.subkey].t - data["tile_T_cam"][self.subkey].t
+        shift = pred[self.subkey][self.key].t - data["tile_T_cam"][self.subkey].t
         shift = (rotmat2d(yaw) @ shift.unsqueeze(-1)).squeeze(-1)
         error = torch.abs(shift)
         value = error.view(-1, 2)
