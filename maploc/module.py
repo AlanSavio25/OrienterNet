@@ -52,6 +52,16 @@ class GenericModule(pl.LightningModule):
         )
         return losses["total"].mean()
 
+    def on_train_batch_end(self, *args, **kwargs):
+
+        # Example: Inspect the gradients
+        for name, param in self.named_parameters():
+
+            if not "confidence" in name:
+                continue
+            if param.grad is None:
+                print(f'{name} has no gradient')
+
     def validation_step(self, batch, batch_idx):
         pred = self(batch)
         losses = self.model.loss(pred, batch)
@@ -170,8 +180,8 @@ class GenericModule(pl.LightningModule):
         if isinstance(
             batch["pixels_per_meter"], dict
         ):  # TODO: this needs to be something else
-            if self.cfg.model.multiscale:
-                return super().transfer_batch_to_device(batch, device, dataloader_idx)
+            # if self.cfg.model.multiscale:
+            return super().transfer_batch_to_device(batch, device, dataloader_idx)
             if self.training:
                 scale_idx = int(
                     np.random.choice(np.arange(len(self.cfg.model.bev_mapper.z_max)))
