@@ -142,6 +142,7 @@ class OrienterNet(BaseModel):
     def _forward(self, data):
 
         # TODO: for later, make data = {32.0: {keys}}, where the shared values can be referenced to avoid increas memory usage
+        # This will make data and pred consistent
 
         # NOTE: for random scale selection, selected choices should be
         # forwarded through args and not through data.
@@ -151,6 +152,7 @@ class OrienterNet(BaseModel):
         # Predict BEV from image
         bev_mapper_pred = self.bev_mapper(data)
         # pred.update({**bev_mapper_pred})
+        # pred = bev_mapper_pred[self.conf.bev_mapper.z_max[0]]
         pred = bev_mapper_pred
         # TODO: just make this pred = self.bev_mapper(data)
 
@@ -164,8 +166,10 @@ class OrienterNet(BaseModel):
             semantic_map = self.map_encoder(
                 {"map": data["semantic_map"]}
             )  # TODO go deeper into this
-            for k in semantic_map:
+            for i, k in enumerate(semantic_map):
+                # pred[i]["semantic_map"] = semantic_map[k]
                 pred[k]["semantic_map"] = semantic_map[k]
+                # feature_maps[k].append(pred[i]["semantic_map"]["map_features"][0])
                 feature_maps[k].append(pred[k]["semantic_map"]["map_features"][0])
 
             # pred.update(semantic_map) # TODO: check if the nested gets updated, else simply for loop
@@ -191,7 +195,9 @@ class OrienterNet(BaseModel):
                 raise ValueError(f"At least one feature map must be created")
 
             f_bev, valid_bev, confidence_bev = [
-                pred[k]["bev"][key] for key in ["output", "valid_bev", "confidence"]
+                # pred[i]["bev"][key] for key in ["output", "valid_bev", "confidence"]
+                pred[k]["bev"][key]
+                for key in ["output", "valid_bev", "confidence"]
             ]
 
             if self.conf.chop_bev:
@@ -215,16 +221,18 @@ class OrienterNet(BaseModel):
             # OrienterNet's Exhaustive Matching
 
             # Temporarily revert bev format. TODO: refactor template sampler.
+            # f_bev = pred[i]["bev"]["output"] = torch.rot90(f_bev, 1, dims=(-2, -1))
             f_bev = pred[k]["bev"]["output"] = torch.rot90(f_bev, 1, dims=(-2, -1))
             if confidence_bev is None or confidence_bev == None:
                 raise ValueError
             if confidence_bev is not None:
+                # confidence_bev = pred[i]["bev"]["confidence"] = torch.rot90(
                 confidence_bev = pred[k]["bev"]["confidence"] = torch.rot90(
                     confidence_bev, 1, dims=(-2, -1)
                 )
             valid_bev = torch.rot90(valid_bev, 1, dims=(-2, -1))
 
-            template_sampler = self.bev_mapper.template_sampler  # [i]
+            template_sampler = self.bev_mapper.template_sampler[i]
 
             scores = self.exhaustive_voting(
                 template_sampler, f_bev, f_map, valid_bev, confidence_bev
@@ -232,10 +240,11 @@ class OrienterNet(BaseModel):
             scores = scores.moveaxis(1, -1)  # B,H,W,N
 
             if (
-                "semantic_map" in pred
-                and "log_prior" in pred["semantic_map"]
+                "semantic_map" in pred[k]
+                and "log_prior" in pred[k]["semantic_map"]
                 and self.conf.apply_map_prior
             ):
+                # log_prior = pred[i]["semantic_map"]["log_prior"][0]
                 log_prior = pred[k]["semantic_map"]["log_prior"][0]
                 scores = scores + log_prior.unsqueeze(-1)
             # pred["scores_unmasked"] = scores.clone()
@@ -262,26 +271,17 @@ class OrienterNet(BaseModel):
             tile_T_cam_avg = Transform2D.from_pixels(map_T_cam_avg, resolution)
 
             # Revert mem layout to snap's. TODO: Remove when template sampler is fixed
+            # f_bev = pred[i]["bev"]["output"] = torch.rot90(f_bev, -1, dims=(-2, -1))
             f_bev = pred[k]["bev"]["output"] = torch.rot90(f_bev, -1, dims=(-2, -1))
             if confidence_bev is not None:
+                # confidence_bev = pred[i]["bev"]["confidence"] = torch.rot90(
                 confidence_bev = pred[k]["bev"]["confidence"] = torch.rot90(
                     confidence_bev, -1, dims=(-2, -1)
                 )
             valid_bev = torch.rot90(valid_bev, -1, dims=(-2, -1))
 
-            # todo: make this neater
-            # pred.setdefault("tile_T_cam_max", {})[k] = tile_T_cam_max
-            # pred.setdefault("tile_T_cam_expectation", {})[k] = tile_T_cam_avg
-            # pred.setdefault("map_T_cam_max", {})[k] = map_T_cam_max
-            # pred.setdefault("map_T_cam_expectation", {})[k] = map_T_cam_avg
-            # pred.setdefault("features_map", {})[k] = f_map
-            # pred.setdefault("features_bev", {})[k] = f_bev
-            # pred.setdefault("valid_bev", {})[k] = valid_bev.squeeze(1)
-            # pred.setdefault("scores", {})[k] = scores
-            # pred.setdefault("log_probs", {})[k] = log_probs
             pred[k].update(
                 {
-                    # **pred,
                     "tile_T_cam_max": tile_T_cam_max,
                     "tile_T_cam_expectation": tile_T_cam_avg,
                     "map_T_cam_max": map_T_cam_max,
@@ -315,6 +315,7 @@ class OrienterNet(BaseModel):
             uv_gt = ij_gt.clone()
             uv_gt = torch.flip(ij_gt, dims=[-1])
             yaw_gt = (180 - data["tile_T_cam"][k].angle.squeeze(-1)) % 360
+            # log_probs = pred[i]["log_probs"]
             log_probs = pred[k]["log_probs"]
 
             map_mask = data.get("map_mask")
@@ -347,7 +348,7 @@ class OrienterNet(BaseModel):
         scales = self.conf.bev_mapper.z_max
         if isinstance(scales, (float, int)):
             scales = [scales]
-        for s in scales:
+        for i, s in enumerate(scales):
             metrics.update(
                 {
                     f"exhaustive_entropy_{int(s)}": ExhaustiveEntropy("log_probs", s),

@@ -28,6 +28,9 @@ class Location2DRecall(torchmetrics.MeanMetric):
 
     def update(self, pred, data):
         if self.subkey is not None:
+            idx = list(data["tile_T_cam"].keys()).index(self.subkey)
+            # xy_p = pred[idx][self.key]
+            # xy_p = pred[self.key]
             xy_p = pred[self.subkey][self.key]
             xy_gt = data["tile_T_cam"][self.subkey].t
         else:
@@ -50,12 +53,14 @@ class AngleRecall(torchmetrics.MeanMetric):
     def update(self, pred, data):
         if self.subkey is not None:
             gt = data["tile_T_cam"][self.subkey].angle
+            idx = list(data["tile_T_cam"].keys()).index(self.subkey)
+            # p = pred[idx][self.key].angle
+            # p = pred[self.key].angle
             p = pred[self.subkey][self.key].angle
         else:
             gt = data["tile_T_cam"].angle
             p = pred[self.key].angle
 
-        
         error = angle_error(p, gt)
         super().update((error <= self.threshold).float())
 
@@ -87,6 +92,9 @@ class ExhaustiveEntropy(MeanMetricWithRecall):
 
     def update(self, pred, data):
         if self.subkey is not None:
+            idx = list(data["tile_T_cam"].keys()).index(self.subkey)
+            # log_probs = pred[idx][self.key]
+            # log_probs = pred[self.key]
             log_probs = pred[self.subkey][self.key]
         else:
             log_probs = pred[self.key]
@@ -107,15 +115,16 @@ class AngleError(MeanMetricWithRecall):
 
     def update(self, pred, data):
         if self.subkey is not None:
+            idx = list(data["tile_T_cam"].keys()).index(self.subkey)
+            # p = pred[idx][self.key].angle
+            # p = pred[self.key].angle
             p = pred[self.subkey][self.key].angle
             gt = data["tile_T_cam"][self.subkey]
         else:
             p = pred[self.key].angle
             gt = data["tile_T_cam"]
 
-        value = angle_error(
-            p, gt.angle
-        )
+        value = angle_error(p, gt.angle)
         if value.numel():
             self.value.append(value)
 
@@ -129,6 +138,9 @@ class Location2DError(MeanMetricWithRecall):
     def update(self, pred, data):
         if self.subkey is not None:
             xy_gt = data["tile_T_cam"][self.subkey].t
+            idx = list(data["tile_T_cam"].keys()).index(self.subkey)
+            # xy_p = pred[idx][self.key]
+            # xy_p = pred[self.key]
             xy_p = pred[self.subkey][self.key]
         else:
             xy_gt = data["tile_T_cam"].t

@@ -182,7 +182,7 @@ class BEVMapper(BaseModel):
         self.image_encoder = Encoder(conf.image_encoder.backbone)  # 12M params
         ppm = conf.pixel_per_meter
 
-        if not conf.multiscale or True: # TODO: remove
+        if not conf.multiscale:  # TODO: remove
             self.projection_polar = PolarProjectionDepth(
                 conf.z_max[0], ppm[0], conf.scale_range, conf.z_min
             )
@@ -194,44 +194,46 @@ class BEVMapper(BaseModel):
             )
 
         else:
-            self.projection_polar = torch.nn.ModuleList([
-                PolarProjectionDepth(
-                    conf.z_max[i],
-                    ppm[i],
-                    conf.scale_range,
-                    conf.z_min
-                )
-                for i in range(len(conf.z_max))
-            ])
-            self.projection_bev = torch.nn.ModuleList([
-                CartesianProjection(
-                    conf.z_max[i], conf.x_max[i], ppm[i], conf.z_min
-                )
-                for i in range(len(conf.z_max))
-            ])
-            self.template_sampler = torch.nn.ModuleList([
-                TemplateSampler(
-                    self.projection_bev[i].grid_xz,
-                    ppm[i],
-                    conf.num_rotations)
+            self.projection_polar = torch.nn.ModuleList(
+                [
+                    PolarProjectionDepth(
+                        conf.z_max[i], ppm[i], conf.scale_range, conf.z_min
+                    )
                     for i in range(len(conf.z_max))
-            ])
+                ]
+            )
+            self.projection_bev = torch.nn.ModuleList(
+                [
+                    CartesianProjection(
+                        conf.z_max[i], conf.x_max[i], ppm[i], conf.z_min
+                    )
+                    for i in range(len(conf.z_max))
+                ]
+            )
+            self.template_sampler = torch.nn.ModuleList(
+                [
+                    TemplateSampler(
+                        self.projection_bev[i].grid_xz, ppm[i], conf.num_rotations
+                    )
+                    for i in range(len(conf.z_max))
+                ]
+            )
 
         if conf.mode == "inverse":
             if conf.feature_depth_fusion == "mlp":
                 # Fuse feature and depth score to predict a new feature
-                if not conf.multiscale or True: # TODO: REMOVE
+                if not conf.multiscale:  # TODO: REMOVE
                     self.fusion_mlp = MLP(
                         conf.fusion_mlp
                     )  # input_dim: feat_dim+score, out:feat_dim
                 else:
-                    self.fusion_mlp = torch.nn.ModuleList([
-                        MLP(conf.fusion_mlp) for i in range(len(conf.z_max))
-                    ])  # 66k params
+                    self.fusion_mlp = torch.nn.ModuleList(
+                        [MLP(conf.fusion_mlp) for i in range(len(conf.z_max))]
+                    )  # 66k params
 
             # TODO: rename z_max to max_depth?
 
-            if not conf.multiscale or True:
+            if not conf.multiscale:
                 self.grid, self.grid_t_cam, self.cam_xy_pts, self.grid_xy_pts = (
                     build_frustum_grid(
                         cell_size=conf.grid_cell_size[0],
@@ -241,6 +243,7 @@ class BEVMapper(BaseModel):
                 )
 
             else:
+                # TODO: cleanup, all of these are not needed
                 self.grid, self.grid_t_cam, self.cam_xy_pts, self.grid_xy_pts = (
                     [],
                     [],
@@ -269,7 +272,7 @@ class BEVMapper(BaseModel):
                 'inverse' (SNAP). Got: {self.conf.mode}"
             )
 
-        if not conf.multiscale or True:  # TODO: remove
+        if not conf.multiscale:  # TODO: remove
 
             if conf.scale_classifier == "linear" or conf.mode == "forward":
                 self.scale_classifier = torch.nn.Linear(
@@ -280,31 +283,30 @@ class BEVMapper(BaseModel):
                 self.scale_classifier = MLP(conf.scale_mlp)
         else:
             if conf.scale_classifier == "linear" or conf.mode == "forward":
-                self.scale_classifier = torch.nn.ModuleList([
-                        torch.nn.Linear(
-                            conf.latent_dim, conf.num_scale_bins
-                        )
+                self.scale_classifier = torch.nn.ModuleList(
+                    [
+                        torch.nn.Linear(conf.latent_dim, conf.num_scale_bins)
                         for i in range(len(conf.z_max))
-                ])
+                    ]
+                )
             elif conf.scale_classifier == "mlp":
                 assert conf.scale_mlp is not None
-                self.scale_classifier = torch.nn.ModuleList([
-                        MLP(conf.scale_mlp)  # 4257 params
-                        for i in range(len(conf.z_max))
-                ])
+                self.scale_classifier = torch.nn.ModuleList(
+                    [MLP(conf.scale_mlp) for i in range(len(conf.z_max))]  # 4257 params
+                )
 
         self.vertical_pooling = VerticalPooling({"pooling": conf.vertical_pooling})
         if conf.bev_net is None:
             self.bev_net = None
         else:
-            if not conf.multiscale or True: # TODO: remove
+            if not conf.multiscale:  # TODO: remove
                 self.bev_net = BEVNet(conf.bev_net)
             else:
                 # The z_max configuration indicates that we are generating multiple BEVs
                 # self.bev_net = BEVNet(conf.bev_net)
-                self.bev_net = torch.nn.ModuleList([
-                    BEVNet(conf.bev_net) for i in range(len(conf.z_max))
-                ]) # 72k params
+                self.bev_net = torch.nn.ModuleList(
+                    [BEVNet(conf.bev_net) for i in range(len(conf.z_max))]
+                )  # 72k params
 
         if conf.bev_net is None:
             self.feature_projection = torch.nn.Linear(
@@ -315,6 +317,8 @@ class BEVMapper(BaseModel):
 
     def _forward(self, data):
 
+        # pred = [{} for k in self.conf.z_max]
+        # pred = {}
         pred = {k: {} for k in self.conf.z_max}
 
         # Extract image features.
@@ -349,7 +353,7 @@ class BEVMapper(BaseModel):
                 f_bev = self.feature_projection(f_bev.moveaxis(1, -1)).moveaxis(-1, 1)
                 pred["bev"] = {"output": f_bev}
             else:
-                pred_bev = pred["bev"] = self.bev_net(
+                pred_bev = pred["bev"] = self.bev_net[i](
                     {"input": f_bev}
                 )  # SNAP: This can probably be reused for the SNAP implementation
                 f_bev = pred_bev["output"]
@@ -380,12 +384,16 @@ class BEVMapper(BaseModel):
             # Iterate through xy grids for each BEV
             # for idx, k in enumerate(self.conf.z_max):
 
+            # if True:
             for i, k in enumerate(self.conf.z_max):
-                # k = self.conf.z_max
+                # k = self.conf.z_max[0] # used for selecting data when pred is no dict
                 # TODO: add [i]
-                pred[k]["pixel_scales"] = scales = self.scale_classifier(f_image.moveaxis(-3, -1))  # if snap, then this should be an mlp
+                # pred[i]["pixel_scales"] = scales = self.scale_classifier(f_image.moveaxis(-3, -1))  # if snap, then this should be an mlp
+                pred[k]["pixel_scales"] = scales = self.scale_classifier[i](
+                    f_image.moveaxis(-3, -1)
+                )  # if snap, then this should be an mlp
 
-                xy = self.cam_xy_pts # [i]
+                xy = self.cam_xy_pts[i]
                 if len(xy.shape) != 4:
                     xy = xy[None].repeat_interleave(tile_T_cam[k].shape[0], dim=0)
 
@@ -450,7 +458,7 @@ class BEVMapper(BaseModel):
 
                 if self.conf.feature_depth_fusion == "mlp":  # like snap
                     # as in SNAP: X = MLP([f_proj, score]). Then, vertical pool to get M = max X
-                    f_grid = self.fusion_mlp(
+                    f_grid = self.fusion_mlp[i](
                         torch.cat([f_proj, scores_proj[..., None]], dim=-1)
                     )
                 elif self.conf.feature_depth_fusion == "softmax":  # like orienternet
@@ -505,14 +513,19 @@ class BEVMapper(BaseModel):
                     # channel last -> classifier -> channel first
                     f_bev = self.feature_projection(f_bev).moveaxis(-1, 1)
                     pred[k]["bev"] = {"output": f_bev}
+                    raise ValueError
                 else:
-                    pred[k]["bev"] = self.bev_net({"input": f_bev.moveaxis(-1, 1)})
+                    # pred[i]["bev"] = self.bev_net({"input": f_bev.moveaxis(-1, 1)})
+                    pred[k]["bev"] = self.bev_net[i]({"input": f_bev.moveaxis(-1, 1)})
                     # pred["bev"][k] = self.bev_net[str(int(k))](
                     #     {"input": f_bev.moveaxis(-1, 1)}
                     # )
                     # f_bev = pred_bev["output"]
 
+                # pred[i]["bev"]["valid_bev"] = valid_bev
+                # pred[i]["features_image"] = f_image # duplicate
                 pred[k]["bev"]["valid_bev"] = valid_bev
+                pred[k]["features_image"] = f_image  # duplicate
 
-        pred.update({"features_image": f_image})
+        # pred.update({"features_image": f_image})
         return pred
