@@ -147,40 +147,26 @@ class OrienterNet(BaseModel):
         # NOTE: for random scale selection, selected choices should be
         # forwarded through args and not through data.
 
-        # pred = {k: {} for k in self.conf.bev_mapper.z_max}
-
         # Predict BEV from image
-        bev_mapper_pred = self.bev_mapper(data)
-        # pred.update({**bev_mapper_pred})
-        # pred = bev_mapper_pred[self.conf.bev_mapper.z_max[0]]
-        pred = bev_mapper_pred
-        # TODO: just make this pred = self.bev_mapper(data)
+        pred = self.bev_mapper(data)
 
         # Encode aerial/semantic maps
         # note: these maps are in memory layout
         feature_maps = {k: [] for k in self.conf.bev_mapper.z_max}
         if self.map_encoder is not None:
             assert "semantic_map" in data
-            # this should return {k: {"semantic_map"}}
-            # pred["semantic_map"] = self.map_encoder({"map": data["semantic_map"][k]})
-            semantic_map = self.map_encoder(
-                {"map": data["semantic_map"]}
-            )  # TODO go deeper into this
+            semantic_map = self.map_encoder({"map": data["semantic_map"]})
             for i, k in enumerate(semantic_map):
-                # pred[i]["semantic_map"] = semantic_map[k]
                 pred[k]["semantic_map"] = semantic_map[k]
-                # feature_maps[k].append(pred[i]["semantic_map"]["map_features"][0])
                 feature_maps[k].append(pred[k]["semantic_map"]["map_features"][0])
 
-            # pred.update(semantic_map) # TODO: check if the nested gets updated, else simply for loop
-
-        # # todo: update aerial
-        # if self.aerial_encoder is not None:
-        #     assert "aerial_map" in data, "Aerial map not found in data"
-        #     pred["aerial_map"] = self.aerial_encoder({"image": data["aerial_map"]})[
-        #         "feature_maps"
-        #     ][0]
-        #     feature_maps.append(pred["aerial_map"])
+        if self.aerial_encoder is not None:
+            assert "aerial_map" in data, "Aerial map not found in data"
+            # Todo: make aerial encoder compatible w multiple inputs
+            pred[k]["aerial_map"] = self.aerial_encoder({"image": data["aerial_map"]})[
+                "feature_maps"
+            ][0]
+            feature_maps.append(pred["aerial_map"])
 
         for i, k in enumerate(self.conf.bev_mapper.z_max):
 
@@ -188,16 +174,12 @@ class OrienterNet(BaseModel):
             if len(feature_maps) == 1:
                 f_map = feature_maps[k][0]
             elif len(feature_maps) > 1:
-                f_map = self.fuse_neural_maps(
-                    feature_maps
-                )  # this function should do the looping through keys?
+                f_map = self.fuse_neural_maps(feature_maps[k])
             else:
                 raise ValueError(f"At least one feature map must be created")
 
             f_bev, valid_bev, confidence_bev = [
-                # pred[i]["bev"][key] for key in ["output", "valid_bev", "confidence"]
-                pred[k]["bev"][key]
-                for key in ["output", "valid_bev", "confidence"]
+                pred[k]["bev"][key] for key in ["output", "valid_bev", "confidence"]
             ]
 
             if self.conf.chop_bev:
@@ -205,7 +187,6 @@ class OrienterNet(BaseModel):
                 valid_bev[..., half_depth:] = False
 
             all_valid_mask = {k: torch.ones((f_map[:, 0, ...].shape)).to(valid_bev)}
-            # all_valid_mask = torch.ones((f_map[:, 0, ...].shape)).to(valid_bev)
             map_mask = data.get("map_mask", all_valid_mask)[k]
 
             if map_mask.shape[-2:] != f_map.shape[-2:]:
@@ -221,12 +202,10 @@ class OrienterNet(BaseModel):
             # OrienterNet's Exhaustive Matching
 
             # Temporarily revert bev format. TODO: refactor template sampler.
-            # f_bev = pred[i]["bev"]["output"] = torch.rot90(f_bev, 1, dims=(-2, -1))
             f_bev = pred[k]["bev"]["output"] = torch.rot90(f_bev, 1, dims=(-2, -1))
             if confidence_bev is None or confidence_bev == None:
                 raise ValueError
             if confidence_bev is not None:
-                # confidence_bev = pred[i]["bev"]["confidence"] = torch.rot90(
                 confidence_bev = pred[k]["bev"]["confidence"] = torch.rot90(
                     confidence_bev, 1, dims=(-2, -1)
                 )
@@ -244,7 +223,6 @@ class OrienterNet(BaseModel):
                 and "log_prior" in pred[k]["semantic_map"]
                 and self.conf.apply_map_prior
             ):
-                # log_prior = pred[i]["semantic_map"]["log_prior"][0]
                 log_prior = pred[k]["semantic_map"]["log_prior"][0]
                 scores = scores + log_prior.unsqueeze(-1)
             # pred["scores_unmasked"] = scores.clone()
@@ -271,10 +249,8 @@ class OrienterNet(BaseModel):
             tile_T_cam_avg = Transform2D.from_pixels(map_T_cam_avg, resolution)
 
             # Revert mem layout to snap's. TODO: Remove when template sampler is fixed
-            # f_bev = pred[i]["bev"]["output"] = torch.rot90(f_bev, -1, dims=(-2, -1))
             f_bev = pred[k]["bev"]["output"] = torch.rot90(f_bev, -1, dims=(-2, -1))
             if confidence_bev is not None:
-                # confidence_bev = pred[i]["bev"]["confidence"] = torch.rot90(
                 confidence_bev = pred[k]["bev"]["confidence"] = torch.rot90(
                     confidence_bev, -1, dims=(-2, -1)
                 )

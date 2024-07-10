@@ -182,7 +182,7 @@ class BEVMapper(BaseModel):
         self.image_encoder = Encoder(conf.image_encoder.backbone)  # 12M params
         ppm = conf.pixel_per_meter
 
-        if not conf.multiscale:  # TODO: remove
+        if not conf.multiscale:
             self.projection_polar = PolarProjectionDepth(
                 conf.z_max[0], ppm[0], conf.scale_range, conf.z_min
             )
@@ -243,28 +243,14 @@ class BEVMapper(BaseModel):
                 )
 
             else:
-                # TODO: cleanup, all of these are not needed
-                self.grid, self.grid_t_cam, self.cam_xy_pts, self.grid_xy_pts = (
-                    [],
-                    [],
-                    [],
-                    [],
-                )
+                self.cam_xy_pts = []
                 for i in range(len(conf.z_max)):
-                    (
-                        grid,
-                        grid_t_cam,
-                        cam_xy_pts,
-                        grid_xy_pts,
-                    ) = build_frustum_grid(
+                    _, _, cam_xy_pts, _ = build_frustum_grid(
                         cell_size=conf.grid_cell_size[i],
                         depth=conf.z_max[i],
                         width=conf.x_max[i] * 2 + conf.grid_cell_size[i],
                     )
-                    self.grid.append(grid)
-                    self.grid_t_cam.append(grid_t_cam)
                     self.cam_xy_pts.append(cam_xy_pts)
-                    self.grid_xy_pts.append(grid_xy_pts)
 
         elif conf.mode != "forward":
             raise ValueError(
@@ -272,7 +258,7 @@ class BEVMapper(BaseModel):
                 'inverse' (SNAP). Got: {self.conf.mode}"
             )
 
-        if not conf.multiscale:  # TODO: remove
+        if not conf.multiscale:
 
             if conf.scale_classifier == "linear" or conf.mode == "forward":
                 self.scale_classifier = torch.nn.Linear(
@@ -299,11 +285,9 @@ class BEVMapper(BaseModel):
         if conf.bev_net is None:
             self.bev_net = None
         else:
-            if not conf.multiscale:  # TODO: remove
+            if not conf.multiscale:
                 self.bev_net = BEVNet(conf.bev_net)
             else:
-                # The z_max configuration indicates that we are generating multiple BEVs
-                # self.bev_net = BEVNet(conf.bev_net)
                 self.bev_net = torch.nn.ModuleList(
                     [BEVNet(conf.bev_net) for i in range(len(conf.z_max))]
                 )  # 72k params
@@ -317,8 +301,6 @@ class BEVMapper(BaseModel):
 
     def _forward(self, data):
 
-        # pred = [{} for k in self.conf.z_max]
-        # pred = {}
         pred = {k: {} for k in self.conf.z_max}
 
         # Extract image features.
@@ -382,13 +364,8 @@ class BEVMapper(BaseModel):
             # grid_xy_pts are 2d grid points centered at the bev origin
 
             # Iterate through xy grids for each BEV
-            # for idx, k in enumerate(self.conf.z_max):
 
-            # if True:
             for i, k in enumerate(self.conf.z_max):
-                # k = self.conf.z_max[0] # used for selecting data when pred is no dict
-                # TODO: add [i]
-                # pred[i]["pixel_scales"] = scales = self.scale_classifier(f_image.moveaxis(-3, -1))  # if snap, then this should be an mlp
                 pred[k]["pixel_scales"] = scales = self.scale_classifier[i](
                     f_image.moveaxis(-3, -1)
                 )  # if snap, then this should be an mlp
@@ -515,17 +492,10 @@ class BEVMapper(BaseModel):
                     pred[k]["bev"] = {"output": f_bev}
                     raise ValueError
                 else:
-                    # pred[i]["bev"] = self.bev_net({"input": f_bev.moveaxis(-1, 1)})
                     pred[k]["bev"] = self.bev_net[i]({"input": f_bev.moveaxis(-1, 1)})
-                    # pred["bev"][k] = self.bev_net[str(int(k))](
-                    #     {"input": f_bev.moveaxis(-1, 1)}
-                    # )
-                    # f_bev = pred_bev["output"]
 
-                # pred[i]["bev"]["valid_bev"] = valid_bev
-                # pred[i]["features_image"] = f_image # duplicate
                 pred[k]["bev"]["valid_bev"] = valid_bev
-                pred[k]["features_image"] = f_image  # duplicate
+                pred[k]["features_image"] = f_image
 
         # pred.update({"features_image": f_image})
         return pred

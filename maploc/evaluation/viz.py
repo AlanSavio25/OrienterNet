@@ -46,14 +46,9 @@ def plot_example_single(
     scene, name = data["scene"], data["name"]
 
     for index, k in enumerate(model.model.conf.bev_mapper.z_max):
-        # if "scale_idx" in data:
-        #     idx = data["scale_idx"][0].item()
-        #     bev_ppm = model.model.conf.pixel_per_meter[idx]
-        # else:
-        #     bev_ppm = model.model.conf.pixel_per_meter
+
         tile_T_cam_gt = data["tile_T_cam"][k]
         bev_ppm = model.model.conf.pixel_per_meter[index]
-        # TODO: Check for more errors of idx
 
         # map_T_cam_gt = Transform2D.to_pixels(
         #     tile_T_cam_gt, 1 / data["bev_ppm"]
@@ -70,7 +65,6 @@ def plot_example_single(
             yaw_p = pred.get("yaw_fused")
         else:
             m_T_c_pred = pred[k]["map_T_cam_max"]
-            # m_T_c_pred = pred["map_T_cam_max"]
             m_t_c_pred = m_T_c_pred.t.squeeze(0)  # ij_p
             yaw_p = m_T_c_pred.angle.squeeze(0)  # m_r_c_pred
 
@@ -79,7 +73,6 @@ def plot_example_single(
             image = image.masked_fill(~data["valid"].unsqueeze(-1), 0.3)
 
         lp_ijt = lp_ij = pred[k]["log_probs"]
-        # lp_ijt = lp_ij = pred["log_probs"]
         if show_fused and "log_probs_fused" in pred[k]:
             lp_ijt = lp_ij = pred[k]["log_probs_fused"]
         elif not show_masked_prob and "scores_unmasked" in pred[k]:
@@ -91,8 +84,7 @@ def plot_example_single(
             lp_ij = lp_ij.clip(min=np.percentile(lp_ij, 1))
         prob = lp_ij.exp()
 
-        feats_map = pred[k]["features_map"]  # pred["semantic_map"]["map_features"][0]
-        # feats_map = pred["features_map"]
+        feats_map = pred[k]["features_map"]
         (feats_map_rgb,) = features_to_RGB(feats_map.numpy())
 
         text1 = rf'$\Delta xy$: {results[f"xy_max_error_32"]:.1f}m'
@@ -169,7 +161,6 @@ def plot_example_single(
             (bev,) = features_to_RGB(
                 pred[k]["features_bev"].numpy(),
                 masks=[pred[k]["valid_bev"].numpy()],
-                # pred["features_bev"].numpy(), masks=[pred["valid_bev"].numpy()]
             )
             bev = np.swapaxes(bev, 0, 1)
             plot_bev(bev, uv=m_t_c_pred, yaw=yaw_p, zorder=10, ax=axes[1])
@@ -316,9 +307,7 @@ def plot_example_single(
             write_torch_image(p.format("image").replace("pdf", "jpg"), image.numpy())
 
         scales_scores = pred[k]["pixel_scales"]  # [..., 2:-7]
-        # scales_scores = pred["pixel_scales"]
-        # max_depth = model.model.conf.bev_mapper.z_max
-        z_max = k  # 32.0 # TODO: fix this
+        z_max = k
         if z_max == 256.0:
             scales_scores[..., -10:] = 0  # 256m
         elif z_max == 128.0:
@@ -338,15 +327,11 @@ def plot_example_single(
 
         feats_q = pred[k]["features_bev"]
         mask_bev = pred[k]["valid_bev"]
-        # feats_q = pred["features_bev"]
-        # mask_bev = pred["valid_bev"]
         prior = None
         if "semantic_map" in pred[k] and "log_prior" in pred[k]["semantic_map"]:
             prior = pred[k]["semantic_map"]["log_prior"][0].sigmoid()
-            # prior = pred["semantic_map"]["log_prior"][0].sigmoid()
         if "bev" in pred[k] and "confidence" in pred[k]["bev"]:
             conf_q = pred[k]["bev"]["confidence"]
-            # conf_q = pred["bev"]["confidence"]
         else:
             conf_q = torch.norm(feats_q, dim=0)
         conf_q = conf_q.masked_fill(~mask_bev, np.nan)
@@ -389,10 +374,7 @@ def plot_example_single(
         else:
             plt.show()
 
-        (feats_image,) = features_to_RGB(
-            pred[k]["features_image"].numpy()
-            # pred["features_image"].numpy()
-        )
+        (feats_image,) = features_to_RGB(pred[k]["features_image"].numpy())
         origins = ["upper", "upper", "upper", "upper"]
         plot_images(
             [feats_image, scales_exp, max_score, total_score],
