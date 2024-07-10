@@ -87,9 +87,9 @@ def plot_example_single(
         feats_map = pred[k]["features_map"]
         (feats_map_rgb,) = features_to_RGB(feats_map.numpy())
 
-        text1 = rf'$\Delta xy$: {results[f"xy_max_error_32"]:.1f}m'
+        text1 = rf'$\Delta xy$: {results[f"xy_max_error_{str(int(k))}"]:.1f}m'
         if has_rotation:
-            text1 += rf', $\Delta\theta$: {results[f"yaw_max_error_32"]:.1f}°'
+            text1 += rf', $\Delta\theta$: {results[f"yaw_max_error_{str(int(k))}"]:.1f}°'
         if show_fused and "xy_fused_error" in results:
             text1 += rf', $\Delta xy_{{fused}}$: {results["xy_fused_error"]:.1f}m'
             text1 += rf', $\Delta\theta_{{fused}}$: {results["yaw_fused_error"]:.1f}°'
@@ -215,7 +215,7 @@ def plot_example_single(
             name_ = name.replace("/", "_")
             p = str(
                 out_dir
-                / f"{idx}_{results[f'xy_max_error_32']:.1f}_{scene}_{name_}_{{k}}.png"
+                / f"{idx}_{results[f'xy_max_error_{str(int(k))}']:.1f}_{scene}_{name_}_{{k}}.png"
             )
             save_plot(p.format("pred"))
             plt.close()
