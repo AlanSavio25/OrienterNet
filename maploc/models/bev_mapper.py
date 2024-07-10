@@ -413,7 +413,13 @@ class BEVMapper(BaseModel):
                 f_proj = interpolate_features(
                     torch.cat(
                         [
-                            f_image,
+                            f_image[
+                                :,
+                                i
+                                * self.conf.latent_dim : (i + 1)
+                                * self.conf.latent_dim,
+                                ...,
+                            ],
                             scales.moveaxis(-1, -3),
                         ],
                         1,
@@ -495,7 +501,7 @@ class BEVMapper(BaseModel):
                     pred[k]["bev"] = self.bev_net[i]({"input": f_bev.moveaxis(-1, 1)})
 
                 pred[k]["bev"]["valid_bev"] = valid_bev
-                pred[k]["features_image"] = f_image
+            pred["features_image"] = f_image
 
         # pred.update({"features_image": f_image})
         return pred

@@ -171,7 +171,7 @@ class OrienterNet(BaseModel):
         for i, k in enumerate(self.conf.bev_mapper.z_max):
 
             # Fuse neural maps if semantic and aerial
-            if len(feature_maps) == 1:
+            if len(feature_maps[k]) == 1:
                 f_map = feature_maps[k][0]
             elif len(feature_maps) > 1:
                 f_map = self.fuse_neural_maps(feature_maps[k])
@@ -242,9 +242,7 @@ class OrienterNet(BaseModel):
             map_T_cam_max = Transform2D.from_degrees(yaw_max, ij_max)
             map_T_cam_avg = Transform2D.from_degrees(yaw_avg, ij_avg)
 
-            # idx = data["scale_idx"][0].item()
-            bev_ppm = self.conf.pixel_per_meter[i]
-            resolution = 1 / bev_ppm  # self.conf.pixel_per_meter
+            resolution = 1 / self.conf.pixel_per_meter[i]
             tile_T_cam_max = Transform2D.from_pixels(map_T_cam_max, resolution)
             tile_T_cam_avg = Transform2D.from_pixels(map_T_cam_avg, resolution)
 

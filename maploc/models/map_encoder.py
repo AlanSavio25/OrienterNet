@@ -59,7 +59,7 @@ class MapEncoder(BaseModel):
             ]
             embeddings = torch.cat(embeddings, dim=-1).permute(0, 3, 1, 2)
             if isinstance(self.encoder, BaseModel):
-                features = self.encoder({"image": embeddings, "out_scale_idx": idx})[ # TODO: check this
+                features = self.encoder({"image": embeddings, "out_scale_idx": idx})[
                     "feature_maps"
                 ]
             else:

@@ -374,7 +374,9 @@ def plot_example_single(
         else:
             plt.show()
 
-        (feats_image,) = features_to_RGB(pred[k]["features_image"].numpy())
+        (feats_image,) = features_to_RGB(
+            pred["features_image"][index * 128 : (index + 1) * 128, ...].numpy()
+        )
         origins = ["upper", "upper", "upper", "upper"]
         plot_images(
             [feats_image, scales_exp, max_score, total_score],
