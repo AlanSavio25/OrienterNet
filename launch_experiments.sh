@@ -1,12 +1,12 @@
 #!/bin/bash
-#SBATCH --job-name=10_11_snap_coarse_128m_2mpp
-#SBATCH --output=sbatch_outputs/10_11_snap_coarse_128m_2mpp.out
+#SBATCH --job-name=10_10_snap_coarse_128m_2mpp
+#SBATCH --output=sbatch_outputs/10_10_snap_coarse_128m_2mpp.out
 #SBATCH --time=48:00:00
 #SBATCH --ntasks-per-node=14
 #SBATCH --mem-per-cpu=14G
 #SBATCH --account=ls_polle
 #SBATCH --gpus=nvidia_geforce_rtx_4090:1
-#SBATCH --gres=gpumem:22G
+#SBATCH --gres=gpumem:20G
 #SBATCH --signal=INT@600
 
 # nvidia_geforce_rtx_4090
@@ -650,31 +650,30 @@
 #         training.trainer.max_steps=320000
 
 # 10_10 Single Scale - Finer BEV AND Finer Map Raster coarse - 2mpp # Replacement of 9_16
-# EXPERIMENT_NAME="10_10_snap_coarse_128m_2mpp"
-# python -m maploc.train experiment.name=$EXPERIMENT_NAME \
-#         data.return_multiscale=True \
-#         data.crop_size_meters=[256] \
-#         data.mask_pad=[4] \
-#         data.max_init_error=[192] \
-#         data.pixel_per_meter=2 \
-#         data.tiles_filename=tiles.pkl \
-#         model.multiscale=True \
-#         model.map_encoder.backbone.output_scales=[1] \
-#         model.map_encoder.backbone.max_pool_ksize=[2] \
-#         model.pixel_per_meter=[0.5] \
-#         model.bev_mapper.z_max=[128.0] \
-#         model.bev_mapper.x_max=[128.0] \
-#         model.bev_mapper.grid_cell_size=[1.0] \
-#         model.bev_mapper.image_encoder.backbone.encoder=resnet18 \
-#         data.z_max=[128.0] \
-#         training.lr=5e-5 \
-#         training.trainer.max_steps=320000
+EXPERIMENT_NAME="10_10_snap_coarse_128m_2mpp"
+python -m maploc.train experiment.name=$EXPERIMENT_NAME \
+        data.return_multiscale=True \
+        data.crop_size_meters=[256] \
+        data.mask_pad=[4] \
+        data.max_init_error=[192] \
+        data.pixel_per_meter=1 \
+        data.tiles_filename=tiles_1mpp.pkl \
+        model.multiscale=True \
+        model.map_encoder.backbone.output_scales=[1] \
+        model.map_encoder.backbone.max_pool_ksize=[1] \
+        model.pixel_per_meter=[0.5] \
+        model.bev_mapper.z_max=[128.0] \
+        model.bev_mapper.x_max=[128.0] \
+        model.bev_mapper.grid_cell_size=[1.0] \
+        model.bev_mapper.image_encoder.backbone.encoder=resnet18 \
+        data.z_max=[128.0] \
+        training.lr=5e-5 \
+        training.trainer.max_steps=320000
 
 # 10_11 standard coarse - 2mpp # For comparing directly with previous (which should outperform this) # replacement of 9_9
 # This is sort of a confirmation that things are identical after the new refactoring
 # EXPERIMENT_NAME="10_11_snap_coarse_128m_2mpp"
 # python -m maploc.train experiment.name=$EXPERIMENT_NAME \
-#         data.scenes=["amsterdam"] \
 #         data.return_multiscale=True \
 #         data.crop_size_meters=[256] \
 #         data.mask_pad=[4] \
