@@ -89,7 +89,9 @@ def plot_example_single(
 
         text1 = rf'$\Delta xy$: {results[f"xy_max_error_{str(int(k))}"]:.1f}m'
         if has_rotation:
-            text1 += rf', $\Delta\theta$: {results[f"yaw_max_error_{str(int(k))}"]:.1f}°'
+            text1 += (
+                rf', $\Delta\theta$: {results[f"yaw_max_error_{str(int(k))}"]:.1f}°'
+            )
         if show_fused and "xy_fused_error" in results:
             text1 += rf', $\Delta xy_{{fused}}$: {results["xy_fused_error"]:.1f}m'
             text1 += rf', $\Delta\theta_{{fused}}$: {results["yaw_fused_error"]:.1f}°'
@@ -374,9 +376,14 @@ def plot_example_single(
         else:
             plt.show()
 
-        (feats_image,) = features_to_RGB(
-            pred["features_image"][index * 128 : (index + 1) * 128, ...].numpy()
-        )
+        f_image = pred["features_image"]
+        if f_image.shape[-3] == model.model.conf.latent_dim:
+            start = 0
+            end = model.model.conf.latent_dim
+        else:
+            start = index * model.model.conf.latent_dim
+            end = (index + 1) * model.model.conf.latent_dim
+        (feats_image,) = features_to_RGB(f_image[start:end, ...].numpy())
         origins = ["upper", "upper", "upper", "upper"]
         plot_images(
             [feats_image, scales_exp, max_score, total_score],

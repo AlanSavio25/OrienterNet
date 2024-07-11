@@ -366,8 +366,15 @@ class BEVMapper(BaseModel):
             # Iterate through xy grids for each BEV
 
             for i, k in enumerate(self.conf.z_max):
+                if f_image.shape[-3] == self.conf.latent_dim:
+                    start = 0
+                    end = self.conf.latent_dim
+                else:
+                    start = i * self.conf.latent_dim
+                    end = (i + 1) * self.conf.latent_dim
+
                 pred[k]["pixel_scales"] = scales = self.scale_classifier[i](
-                    f_image.moveaxis(-3, -1)
+                    f_image[:, start:end, ...].moveaxis(-3, -1)
                 )  # if snap, then this should be an mlp
 
                 xy = self.cam_xy_pts[i]
@@ -413,13 +420,7 @@ class BEVMapper(BaseModel):
                 f_proj = interpolate_features(
                     torch.cat(
                         [
-                            f_image[
-                                :,
-                                i
-                                * self.conf.latent_dim : (i + 1)
-                                * self.conf.latent_dim,
-                                ...,
-                            ],
+                            f_image[:, start:end, ...],
                             scales.moveaxis(-1, -3),
                         ],
                         1,
