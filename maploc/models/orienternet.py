@@ -6,7 +6,7 @@ from torch.nn.functional import normalize
 
 from maploc.models.bev_mapper import BEVMapper
 from maploc.utils.wrappers import Transform2D
-
+from maploc.utils.grids import grid_refinement_orienternet_batched
 from . import get_model
 from .base import BaseModel
 from .map_encoder import MapEncoder
@@ -37,6 +37,7 @@ class OrienterNet(BaseModel):
         "aerial_encoder": None,
         "bev_mapper": None,
         # "bev_net": "???",
+        "grid_refinement": False,
         "latent_dim": "???",
         "matching_dim": "???",
         "pixel_per_meter": "???",
@@ -253,6 +254,37 @@ class OrienterNet(BaseModel):
                     confidence_bev, -1, dims=(-2, -1)
                 )
             valid_bev = torch.rot90(valid_bev, -1, dims=(-2, -1))
+
+            if self.conf.grid_refinement:
+                bev_ij_pts = self.bev_mapper.cam_xy_pts / resolution
+                # BEV faces east in the map frame by default, so we rotate the coords by 90deg
+                bev_ij_pts = Transform2D(torch.Tensor([-90, 0, 0])) @ bev_ij_pts
+                delta_p = 0.5  # m
+                range_p = 2  # m
+                delta_r = 1.0  # deg
+                range_r = 5.0  # deg
+                map_T_cam_max_refined, _, _ = grid_refinement_orienternet_batched(
+                    map_T_cam_max._data,
+                    f_map,
+                    f_bev,
+                    bev_ij_pts.to(
+                        f_map
+                    ),  # TODO: construct this for forward and inverse bev mapper
+                    valid_bev,
+                    map_mask,
+                    delta_p / resolution,  # px
+                    range_p / resolution,  # px
+                    delta_r,
+                    range_r,
+                )
+                tile_T_cam_max_refined = Transform2D.from_pixels(
+                    Transform2D(map_T_cam_max_refined), resolution
+                )
+                map_T_cam_max = map_T_cam_max_refined
+                tile_T_cam_max = tile_T_cam_max_refined
+
+            pred["scores"] = scores
+            pred["log_probs"] = log_probs
 
             pred[k].update(
                 {
