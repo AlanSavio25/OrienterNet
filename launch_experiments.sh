@@ -1,6 +1,6 @@
 #!/bin/bash
-#SBATCH --job-name=10_11_snap_coarse_128m_2mpp
-#SBATCH --output=sbatch_outputs/10_11_snap_coarse_128m_2mpp.out
+#SBATCH --job-name=10_16_snap_coarse_128m_2mpp
+#SBATCH --output=sbatch_outputs/10_16_snap_coarse_128m_2mpp.out
 #SBATCH --time=48:00:00
 #SBATCH --ntasks-per-node=14
 #SBATCH --mem-per-cpu=14G
@@ -673,27 +673,27 @@
 
 # 10_11 standard coarse - 2mpp # For comparing directly with previous (which should outperform this) # replacement of 9_9
 # This is sort of a confirmation that things are identical after the new refactoring
-EXPERIMENT_NAME="10_11_snap_coarse_128m_2mpp"
-python -m maploc.train experiment.name=$EXPERIMENT_NAME \
-        data.return_multiscale=True \
-        data.crop_size_meters=[256] \
-        data.mask_pad=[4] \
-        data.max_init_error=[192] \
-        data.pixel_per_meter=0.5 \
-        data.tiles_filename=tiles_2mpp.pkl \
-        model.multiscale=True \
-        model.map_encoder.backbone.output_scales=[0] \
-        model.map_encoder.backbone.max_pool_ksize=[1] \
-        model.pixel_per_meter=[0.5] \
-        model.bev_mapper.z_max=[128.0] \
-        model.bev_mapper.x_max=[128.0] \
-        model.bev_mapper.grid_cell_size=[2.0] \
-        model.bev_mapper.image_encoder.backbone.encoder=resnet18 \
-        data.z_max=[128.0] \
-        training.lr=5e-5 \
-        training.trainer.max_steps=320000
+# EXPERIMENT_NAME="10_11_snap_coarse_128m_2mpp"
+# python -m maploc.train experiment.name=$EXPERIMENT_NAME \
+#         data.return_multiscale=True \
+#         data.crop_size_meters=[256] \
+#         data.mask_pad=[4] \
+#         data.max_init_error=[192] \
+#         data.pixel_per_meter=0.5 \
+#         data.tiles_filename=tiles_2mpp.pkl \
+#         model.multiscale=True \
+#         model.map_encoder.backbone.output_scales=[0] \
+#         model.map_encoder.backbone.max_pool_ksize=[1] \
+#         model.pixel_per_meter=[0.5] \
+#         model.bev_mapper.z_max=[128.0] \
+#         model.bev_mapper.x_max=[128.0] \
+#         model.bev_mapper.grid_cell_size=[2.0] \
+#         model.bev_mapper.image_encoder.backbone.encoder=resnet18 \
+#         data.z_max=[128.0] \
+#         training.lr=5e-5 \
+#         training.trainer.max_steps=320000
 
-# 10_9 => MULTISCALE model. Same as 10_9, except now we share features.
+# 10_12 => MULTISCALE model. Same as 10_9, except now we share features.
 # This experiment tells us whether tying the features together harms performance or not.
 # EXPERIMENT_NAME="10_12_snap_multiscale"
 # python -m maploc.train experiment.name=$EXPERIMENT_NAME \
@@ -716,5 +716,91 @@ python -m maploc.train experiment.name=$EXPERIMENT_NAME \
 #         training.lr=5e-5 \
 #         training.trainer.max_steps=320000
 
+# MAP DOWNSAMPLE again - this time repeat of before (except now we have max pool before the final computation)
+# We are also experimenting with the coarse64m map downsample
+# 10_13 SNAP coarse - 2x - 1mpp
+# EXPERIMENT_NAME="10_13_snap_coarse_64m_1mpp"
+# python -m maploc.train experiment.name=$EXPERIMENT_NAME \
+#         data.return_multiscale=True \
+#         data.crop_size_meters=[128] \
+#         data.max_init_error=[96] \
+#         data.mask_pad=[4] \
+#         data.pixel_per_meter=2 \
+#         model.pixel_per_meter=[1] \
+#         model.multiscale=True \
+#         data.tiles_filename=tiles.pkl \
+#         model.map_encoder.backbone.output_scales=[1] \
+#         model.map_encoder.backbone.max_pool_ksize=[1] \
+#         model.bev_mapper.z_max=[64.0] \
+#         model.bev_mapper.x_max=[64.0] \
+#         model.bev_mapper.image_encoder.backbone.encoder=resnet18 \
+#         model.bev_mapper.grid_cell_size=[1.0] \
+#         data.z_max=[64.0] \
+#         training.lr=5e-5 \
+#         training.trainer.max_steps=320000
+
+# 10_14 SNAP coarse - 4x - 2mpp
+# EXPERIMENT_NAME="10_14_snap_coarse_128m_2mpp"
+# python -m maploc.train experiment.name=$EXPERIMENT_NAME \
+#         data.return_multiscale=True \
+#         data.crop_size_meters=[256] \
+#         data.max_init_error=[192] \
+#         data.mask_pad=[6] \
+#         data.pixel_per_meter=1 \
+#         model.pixel_per_meter=[0.5] \
+#         model.multiscale=True \
+#         data.tiles_filename=tiles_1mpp.pkl \
+#         model.map_encoder.backbone.output_scales=[1] \
+#         model.map_encoder.backbone.max_pool_ksize=[1] \
+#         model.bev_mapper.z_max=[128.0] \
+#         model.bev_mapper.x_max=[128.0] \
+#         model.bev_mapper.image_encoder.backbone.encoder=resnet18 \
+#         model.bev_mapper.grid_cell_size=[2.0] \
+#         data.z_max=[128.0] \
+#         training.lr=5e-5 \
+#         training.trainer.max_steps=320000
+
+
+# 10_15 SNAP coarse - 4x - 2mpp - Finer BEV with conv instead of bilinear downsampling
+# EXPERIMENT_NAME="10_15_snap_coarse_128m_2mpp"
+# python -m maploc.train experiment.name=$EXPERIMENT_NAME \
+#         data.return_multiscale=True \
+#         data.crop_size_meters=[256] \
+#         data.max_init_error=[192] \
+#         data.mask_pad=[4] \
+#         data.pixel_per_meter=0.5 \
+#         model.pixel_per_meter=[0.5] \
+#         model.multiscale=True \
+#         data.tiles_filename=tiles_2mpp.pkl \
+#         model.map_encoder.backbone.output_scales=[0] \
+#         model.map_encoder.backbone.max_pool_ksize=[1] \
+#         model.bev_mapper.z_max=[128.0] \
+#         model.bev_mapper.x_max=[128.0] \
+#         model.bev_mapper.image_encoder.backbone.encoder=resnet18 \
+#         model.bev_mapper.grid_cell_size=[1.0] \
+#         data.z_max=[128.0] \
+#         training.lr=5e-5 \
+#         training.trainer.max_steps=320000
+
+# 10_15 SNAP coarse - 4x - 2mpp - Finer BEV (fixed) AND Finer MAP
+EXPERIMENT_NAME="10_16_snap_coarse_128m_2mpp"
+python -m maploc.train experiment.name=$EXPERIMENT_NAME \
+        data.return_multiscale=True \
+        data.crop_size_meters=[256] \
+        data.max_init_error=[192] \
+        data.mask_pad=[6] \
+        data.pixel_per_meter=1 \
+        model.pixel_per_meter=[0.5] \
+        model.multiscale=True \
+        data.tiles_filename=tiles_1mpp.pkl \
+        model.map_encoder.backbone.output_scales=[1] \
+        model.map_encoder.backbone.max_pool_ksize=[1] \
+        model.bev_mapper.z_max=[128.0] \
+        model.bev_mapper.x_max=[128.0] \
+        model.bev_mapper.image_encoder.backbone.encoder=resnet18 \
+        model.bev_mapper.grid_cell_size=[1.0] \
+        data.z_max=[128.0] \
+        training.lr=5e-5 \
+        training.trainer.max_steps=320000
 
 exit 0
