@@ -231,7 +231,7 @@ def evaluate_single_image(
 ):
     ppm = model.model.conf.pixel_per_meter
     metrics = MetricCollection(model.model.metrics())
-    metrics["directional_error"] = LateralLongitudinalError()
+    # metrics["directional_error"] = LateralLongitudinalError()
     if has_gps:
         metrics["xy_gps_error"] = Location2DError("tile_t_gps")
         metrics["xy_fused_error"] = Location2DError("tile_T_fused")

@@ -256,7 +256,7 @@ class OrienterNet(BaseModel):
             valid_bev = torch.rot90(valid_bev, -1, dims=(-2, -1))
 
             if self.conf.grid_refinement:
-                bev_ij_pts = self.bev_mapper.cam_xy_pts / resolution
+                bev_ij_pts = self.bev_mapper.cam_xy_pts[i] / resolution
                 # BEV faces east in the map frame by default, so we rotate the coords by 90deg
                 bev_ij_pts = Transform2D(torch.Tensor([-90, 0, 0])) @ bev_ij_pts
                 delta_p = 0.5  # m
@@ -280,11 +280,12 @@ class OrienterNet(BaseModel):
                 tile_T_cam_max_refined = Transform2D.from_pixels(
                     Transform2D(map_T_cam_max_refined), resolution
                 )
-                map_T_cam_max = map_T_cam_max_refined
-                tile_T_cam_max = tile_T_cam_max_refined
-
-            pred["scores"] = scores
-            pred["log_probs"] = log_probs
+                pred[k].update(
+                    {
+                        "tile_T_cam_max_refined": tile_T_cam_max_refined,
+                        "map_T_cam_max_refined": map_T_cam_max_refined,
+                    }
+                )
 
             pred[k].update(
                 {
@@ -374,5 +375,34 @@ class OrienterNet(BaseModel):
                     f"yaw_recall_10°_{int(s)}": AngleRecall(10.0, "tile_T_cam_max", s),
                 }
             )
+            if self.conf.grid_refinement:
+                metrics.update(
+                    {
+                        f"xy_max_error_{int(s)}_refined": Location2DError(
+                            "tile_T_cam_max_refined", s
+                        ),
+                        f"yaw_max_error_{int(s)}_refined": AngleError(
+                            "tile_T_cam_max_refined", s
+                        ),
+                        f"xy_recall_02m_{int(s)}_refined": Location2DRecall(
+                            2.0, "tile_T_cam_max_refined", s
+                        ),
+                        f"xy_recall_05m_{int(s)}_refined": Location2DRecall(
+                            5.0, "tile_T_cam_max_refined", s
+                        ),
+                        f"xy_recall_10m_{int(s)}_refined": Location2DRecall(
+                            10.0, "tile_T_cam_max_refined", s
+                        ),
+                        f"yaw_recall_02°_{int(s)}_refined": AngleRecall(
+                            2.0, "tile_T_cam_max_refined", s
+                        ),
+                        f"yaw_recall_05°_{int(s)}_refined": AngleRecall(
+                            5.0, "tile_T_cam_max_refined", s
+                        ),
+                        f"yaw_recall_10°_{int(s)}_refined": AngleRecall(
+                            10.0, "tile_T_cam_max_refined", s
+                        ),
+                    }
+                )
 
         return metrics
