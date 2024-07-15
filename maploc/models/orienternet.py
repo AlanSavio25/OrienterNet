@@ -226,6 +226,7 @@ class OrienterNet(BaseModel):
             ):
                 log_prior = pred[k]["semantic_map"]["log_prior"][0]
                 scores = scores + log_prior.unsqueeze(-1)
+            scores_unmasked = scores.clone()
             # pred["scores_unmasked"] = scores.clone()
             scores.masked_fill_(~map_mask[..., None], -np.inf)
             if "yaw_prior" in data:  # TODO: refactor
@@ -297,6 +298,7 @@ class OrienterNet(BaseModel):
                     "features_bev": f_bev,
                     "valid_bev": valid_bev.squeeze(1),
                     "scores": scores,
+                    "scores_unmasked": scores_unmasked,
                     "log_probs": log_probs,
                 }
             )
@@ -355,12 +357,18 @@ class OrienterNet(BaseModel):
         scales = self.conf.bev_mapper.z_max
         if isinstance(scales, (float, int)):
             scales = [scales]
-        for i, s in enumerate(scales):
+        for s in scales:
             metrics.update(
                 {
                     f"exhaustive_entropy_{int(s)}": ExhaustiveEntropy("log_probs", s),
                     f"xy_max_error_{int(s)}": Location2DError("tile_T_cam_max", s),
                     f"yaw_max_error_{int(s)}": AngleError("tile_T_cam_max", s),
+                    f"xy_recall_0_5m_{int(s)}": Location2DRecall(
+                        0.5, "tile_T_cam_max", s
+                    ),
+                    f"xy_recall_01m_{int(s)}": Location2DRecall(
+                        1.0, "tile_T_cam_max", s
+                    ),
                     f"xy_recall_02m_{int(s)}": Location2DRecall(
                         2.0, "tile_T_cam_max", s
                     ),
@@ -370,9 +378,15 @@ class OrienterNet(BaseModel):
                     f"xy_recall_10m_{int(s)}": Location2DRecall(
                         10.0, "tile_T_cam_max", s
                     ),
+                    f"xy_recall_20m_{int(s)}": Location2DRecall(
+                        20.0, "tile_T_cam_max", s
+                    ),
+                    f"yaw_recall_0_5°_{int(s)}": AngleRecall(0.5, "tile_T_cam_max", s),
+                    f"yaw_recall_01°_{int(s)}": AngleRecall(1.0, "tile_T_cam_max", s),
                     f"yaw_recall_02°_{int(s)}": AngleRecall(2.0, "tile_T_cam_max", s),
                     f"yaw_recall_05°_{int(s)}": AngleRecall(5.0, "tile_T_cam_max", s),
                     f"yaw_recall_10°_{int(s)}": AngleRecall(10.0, "tile_T_cam_max", s),
+                    f"yaw_recall_20°_{int(s)}": AngleRecall(20.0, "tile_T_cam_max", s),
                 }
             )
             if self.conf.grid_refinement:
