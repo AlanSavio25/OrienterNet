@@ -3,6 +3,7 @@ from typing import Tuple
 
 import torch
 import numpy as np
+import torch.nn.functional as F
 
 from maploc.models.mlp import MLP
 from maploc.utils import grids
@@ -244,6 +245,9 @@ class BEVMapper(BaseModel):
 
             else:
                 self.cam_xy_pts = []
+                bev_downsampling_nets = []
+                self.bev_padding = []
+                self.bev_downscale_factor = []
                 for i in range(len(conf.z_max)):
                     _, _, cam_xy_pts, _ = build_frustum_grid(
                         cell_size=conf.grid_cell_size[i],
@@ -251,6 +255,26 @@ class BEVMapper(BaseModel):
                         width=conf.x_max[i] * 2 + conf.grid_cell_size[i],
                     )
                     self.cam_xy_pts.append(cam_xy_pts)
+                    if conf.grid_cell_size[i] != 1 / conf.pixel_per_meter[i]:
+                        assert conf.grid_cell_size[i] < (
+                            1 / conf.pixel_per_meter[i]
+                        )  # grid is always finer than final bev
+                        scale_factor = int(
+                            (1 / conf.pixel_per_meter[i]) / conf.grid_cell_size[i]
+                        )
+                        downsample = torch.nn.Conv2d(
+                            conf.latent_dim,
+                            conf.latent_dim,
+                            scale_factor + 1,
+                            stride=scale_factor,
+                        )
+                        padding = (0,) + (
+                            int(scale_factor / 2),
+                        ) * 3  # left, right, top, bottom
+                        bev_downsampling_nets.append(downsample)
+                        self.bev_padding.append(padding)
+                        self.bev_downscale_factor.append(scale_factor)
+                self.bev_downsampling = torch.nn.ModuleList(bev_downsampling_nets)
 
         elif conf.mode != "forward":
             raise ValueError(
@@ -464,28 +488,19 @@ class BEVMapper(BaseModel):
 
                 # Enforce a BEV shape of [129,64], regardless of grid resolution.
                 # This allows us to generate a finer larger BEV and then downsample for memory efficiency
-                grid_cell_size = self.conf.grid_cell_size[i]
-                pixel_per_meter = self.conf.pixel_per_meter[i]
-                z_max = self.conf.z_max[i]
-                x_max = self.conf.x_max[i]
 
-                if grid_cell_size != 1 / pixel_per_meter:
-                    h = int((x_max * 2 * pixel_per_meter) + 1)
-                    w = int(z_max * pixel_per_meter)
-                    f_bev = torch.nn.functional.interpolate(
-                        f_bev.moveaxis(-1, -3),
-                        size=(h, w),
-                        mode="bilinear",
-                        align_corners=False,
+                if self.conf.grid_cell_size[i] != (1 / self.conf.pixel_per_meter[i]):
+
+                    # This downsampling ensures principal axis is at the center, and that the last pixel is z_max away from cam.
+                    scale = self.bev_downscale_factor[i]
+                    # we multiply with valid bev so that invalid pixels are not involved in the downsampling.
+                    f_bev = self.bev_downsampling[i](
+                        F.pad(
+                            (f_bev * valid_bev.unsqueeze(-1)).moveaxis(-1, -3),
+                            self.bev_padding[i],
+                        )
                     ).moveaxis(-3, -1)
-                    nan_mask = torch.where(valid_bev, 0, torch.nan)
-                    nan_mask = torch.nn.functional.interpolate(
-                        nan_mask.unsqueeze(1),
-                        size=(h, w),
-                        mode="bilinear",
-                        align_corners=False,
-                    ).squeeze(1)
-                    valid_bev = ~torch.isnan(nan_mask)
+                    valid_bev = valid_bev[..., ::scale, (scale - 1) :: scale]
 
                 assert (
                     list(f_bev.shape[-3:-1]) == [129, 64] == list(valid_bev.shape[-2:])
