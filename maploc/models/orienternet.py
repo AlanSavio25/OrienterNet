@@ -398,6 +398,12 @@ class OrienterNet(BaseModel):
                         f"yaw_max_error_{int(s)}_refined": AngleError(
                             "tile_T_cam_max_refined", s
                         ),
+                        f"xy_recall_0_5m_{int(s)}_refined": Location2DRecall(
+                            0.5, "tile_T_cam_max_refined", s
+                        ),
+                        f"xy_recall_01m_{int(s)}_refined": Location2DRecall(
+                            1.0, "tile_T_cam_max_refined", s
+                        ),
                         f"xy_recall_02m_{int(s)}_refined": Location2DRecall(
                             2.0, "tile_T_cam_max_refined", s
                         ),
@@ -407,6 +413,15 @@ class OrienterNet(BaseModel):
                         f"xy_recall_10m_{int(s)}_refined": Location2DRecall(
                             10.0, "tile_T_cam_max_refined", s
                         ),
+                        f"xy_recall_20m_{int(s)}_refined": Location2DRecall(
+                            20.0, "tile_T_cam_max_refined", s
+                        ),
+                        f"yaw_recall_0_5°_{int(s)}_refined": AngleRecall(
+                            0.5, "tile_T_cam_max_refined", s
+                        ),
+                        f"yaw_recall_01°_{int(s)}_refined": AngleRecall(
+                            1.0, "tile_T_cam_max_refined", s
+                        ),
                         f"yaw_recall_02°_{int(s)}_refined": AngleRecall(
                             2.0, "tile_T_cam_max_refined", s
                         ),
@@ -415,6 +430,9 @@ class OrienterNet(BaseModel):
                         ),
                         f"yaw_recall_10°_{int(s)}_refined": AngleRecall(
                             10.0, "tile_T_cam_max_refined", s
+                        ),
+                        f"yaw_recall_20°_{int(s)}_refined": AngleRecall(
+                            20.0, "tile_T_cam_max_refined", s
                         ),
                     }
                 )
