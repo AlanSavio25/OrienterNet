@@ -2,8 +2,8 @@
 #SBATCH --job-name=11_0_snap_multiscale
 #SBATCH --output=sbatch_outputs/11_0_snap_multiscale.out
 #SBATCH --time=48:00:00
-#SBATCH --ntasks-per-node=14
-#SBATCH --mem-per-cpu=14G
+#SBATCH --ntasks-per-node=18
+#SBATCH --mem-per-cpu=18G
 #SBATCH --account=ls_polle
 #SBATCH --gpus=nvidia_geforce_rtx_4090:1
 #SBATCH --gres=gpumem:24G
@@ -809,7 +809,7 @@ EXPERIMENT_NAME="11_0_snap_multiscale"
 python -m maploc.train experiment.name=$EXPERIMENT_NAME \
         data.tiles_filename=tiles_1mpp.pkl \
         data.return_multiscale=True \
-        data.crop_size_meters=[64,256] \
+        data.crop_size_meters=[64,224] \
         data.max_init_error=[48,192] \
         data.pixel_per_meter=1 \
         data.mask_pad=[2,4] \
@@ -824,7 +824,7 @@ python -m maploc.train experiment.name=$EXPERIMENT_NAME \
         model.bev_mapper.x_max=[32.0,128.0] \
         model.bev_mapper.z_max=[32.0,128.0] \
         training.lr=5e-5 \
-        training.trainer.max_steps=320000
-
+        training.trainer.max_steps=320000 \
+        data.loading.train.batch_size=4
 
 exit 0
