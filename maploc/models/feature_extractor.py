@@ -17,6 +17,42 @@ from .base import BaseModel
 from .utils import checkpointed
 
 
+class ScaleBlock(nn.Module):
+    def __init__(
+        self,
+        inp,
+        out,
+        scale_factor,
+        num_convs=1,
+        norm=nn.BatchNorm2d,
+        padding="replicate",
+    ):
+        super().__init__()
+        self.scale_factor = scale_factor
+
+        layers = []
+        for i in range(num_convs):
+            conv = nn.Conv2d(
+                inp if i == 0 else out,
+                out,
+                kernel_size=3,
+                padding=1,
+                bias=norm is None,
+                padding_mode=padding,
+            )
+            layers.append(conv)
+            if norm is not None:
+                layers.append(norm(out))
+            layers.append(nn.ReLU(inplace=True))
+        self.layers = nn.Sequential(*layers)
+
+    def forward(self, inp):
+        scaled = torch.nn.functional.interpolate(
+            inp, scale_factor=self.scale_factor, mode="bilinear", align_corners=False
+        )
+        return self.layers(scaled)
+
+
 class DecoderBlock(nn.Module):
     def __init__(
         self, previous, skip, out, num_convs=1, norm=nn.BatchNorm2d, padding="zeros"
@@ -66,7 +102,8 @@ class AdaptationBlock(nn.Sequential):
 class FeatureExtractor(BaseModel):
     default_conf = {
         "pretrained": True,
-        "max_pool_ksize": 1,
+        # "max_pool_ksize": 1,
+        "scale_factor": 1,
         "input_dim": 3,
         "output_scales": [0, 2, 4],  # what scales to adapt and output
         "output_dim": 128,  # # of channels in output feature maps
@@ -181,6 +218,11 @@ class FeatureExtractor(BaseModel):
                 previous = out
             self.decoder = nn.ModuleList(decoder)
 
+        scale_factors = conf.scale_factor
+        scale_blocks = []
+        if isinstance(scale_factors, (int, float)):
+            scale_factors = [scale_factors]
+
         # Adaptation layers
         adaptation = []
         for idx, i in enumerate(conf.output_scales):
@@ -196,21 +238,10 @@ class FeatureExtractor(BaseModel):
 
             block = AdaptationBlock(input_, dim)
             adaptation.append(block)
+            scale_blocks.append(ScaleBlock(input_, input_, scale_factors[idx]))
         self.adaptation = nn.ModuleList(adaptation)
+        self.scale_blocks = nn.ModuleList(scale_blocks)
         self.scales = [2**s for s in conf.output_scales]
-
-        # Pool Layers
-        maxpool_ksizes = conf.max_pool_ksize
-        pool = []
-        if isinstance(maxpool_ksizes, (int, float)):
-            maxpool_ksizes = [maxpool_ksizes]
-
-        for ksize in maxpool_ksizes:
-            if ksize > 1:
-                pool.append(nn.MaxPool2d(ksize))
-            else:
-                pool.append(nn.Identity())
-        self.pool = nn.ModuleList(pool)
 
     def _forward(self, data):
         image = data["image"]
@@ -236,11 +267,12 @@ class FeatureExtractor(BaseModel):
         out_scales = self.conf.output_scales
 
         # We always have a single output map (single scale) per forward pass
-        out_scales = [out_scales[data["out_scale_idx"]]]
-        pools = [self.pool[data["out_scale_idx"]]]
+        module_idx = data["out_scale_idx"]
+        out_scale = out_scales[module_idx]
+        scale_block = self.scale_blocks[module_idx]
+        adapt = self.adaptation[module_idx]
+        out_features = [adapt(scale_block(pre_features[out_scale]))]
 
-        for adapt, pool, i in zip(self.adaptation, pools, out_scales):
-            out_features.append(adapt(pool(pre_features[i])))
         pred = {"feature_maps": out_features, "skip_features": skip_features}
         return pred
 
