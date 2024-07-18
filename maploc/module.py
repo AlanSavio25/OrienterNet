@@ -80,6 +80,7 @@ class GenericModule(pl.LightningModule):
                 out_dir=None,
                 show_gps=True,
                 return_plots=True,
+                show_masked_prob=True
             )
             for i, plot in enumerate(plots):
                 self.logger.experiment.add_image(
