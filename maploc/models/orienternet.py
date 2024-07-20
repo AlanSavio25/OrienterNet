@@ -199,6 +199,7 @@ class OrienterNet(BaseModel):
                     align_corners=False,
                 ).squeeze(1)
                 map_mask = ~torch.isnan(nan_mask)
+            pred[k]["map_mask"] = map_mask if "map_mask" in data else None
 
             # OrienterNet's Exhaustive Matching
 

@@ -18,6 +18,7 @@ from .. import EXPERIMENTS_PATH, logger
 from ..data.torch import collate, unbatch_to_device
 from ..models.sequential import GPSAligner, RigidAligner
 from ..models.voting import argmax_xyr, fuse_gps, log_softmax_spatial
+from ..utils.grids import grid_refinement_orienternet_batched
 from ..module import GenericModule
 from ..utils.io import DATA_URL, download_file, read_json
 from .utils import write_dump
@@ -238,37 +239,44 @@ def evaluate_single_image(
     ppm = model.model.conf.pixel_per_meter
     metrics = model.model.metrics()
     if model.model.conf.bev_mapper.multiscale:
+        modes = [""]
+        if model.model.conf.grid_refinement:
+            modes += ["_refined"]
+        values = [
+            ("0_5", 0.5),
+            ("01", 1.0),
+            ("02", 2.0),
+            ("05", 5.0),
+            ("10", 10.0),
+            ("20", 20.0),
+        ]
         metrics.update(
             {
-                f"exhaustive_entropy_chain": ExhaustiveEntropy("log_probs", "chain"),
-                f"xy_max_error_chain": Location2DError("tile_T_cam_max", "chain"),
-                f"yaw_max_error_chain": AngleError("tile_T_cam_max", "chain"),
-                f"xy_recall_0_5m_chain": Location2DRecall(
-                    0.5, "tile_T_cam_max", "chain"
-                ),
-                f"xy_recall_01m_chain": Location2DRecall(
-                    1.0, "tile_T_cam_max", "chain"
-                ),
-                f"xy_recall_02m_chain": Location2DRecall(
-                    2.0, "tile_T_cam_max", "chain"
-                ),
-                f"xy_recall_05m_chain": Location2DRecall(
-                    5.0, "tile_T_cam_max", "chain"
-                ),
-                f"xy_recall_10m_chain": Location2DRecall(
-                    10.0, "tile_T_cam_max", "chain"
-                ),
-                f"xy_recall_20m_chain": Location2DRecall(
-                    20.0, "tile_T_cam_max", "chain"
-                ),
-                f"yaw_recall_0_5°_chain": AngleRecall(0.5, "tile_T_cam_max", "chain"),
-                f"yaw_recall_01°_chain": AngleRecall(1.0, "tile_T_cam_max", "chain"),
-                f"yaw_recall_02°_chain": AngleRecall(2.0, "tile_T_cam_max", "chain"),
-                f"yaw_recall_05°_chain": AngleRecall(5.0, "tile_T_cam_max", "chain"),
-                f"yaw_recall_10°_chain": AngleRecall(10.0, "tile_T_cam_max", "chain"),
-                f"yaw_recall_20°_chain": AngleRecall(20.0, "tile_T_cam_max", "chain"),
+                "exhaustive_entropy_chain": ExhaustiveEntropy("log_probs", f"chain"),
             }
         )
+        for mode in modes:
+            metrics.update(
+                {
+                    f"xy_max_error_chain{mode}": Location2DError(
+                        "tile_T_cam_max", f"chain{mode}"
+                    ),
+                    f"yaw_max_error_chain{mode}": AngleError(
+                        "tile_T_cam_max", f"chain{mode}"
+                    ),
+                }
+            )
+            for val_str, val_float in values:
+                metrics.update(
+                    {
+                        f"xy_recall_{val_str}m_chain{mode}": Location2DRecall(
+                            val_float, "tile_T_cam_max", f"chain{mode}"
+                        ),
+                        f"yaw_recall_{val_str}°_chain{mode}": AngleRecall(
+                            val_float, "tile_T_cam_max", f"chain{mode}"
+                        ),
+                    }
+                )
 
     metrics = MetricCollection(metrics)
     # metrics["directional_error"] = LateralLongitudinalError()
@@ -320,16 +328,19 @@ def evaluate_single_image(
             del ij_fused, uvt_fused, yaw_fused
         names += batch["name"]
 
-        # TODO: chain score volumes. Metrics will then compute it. have to provide the subkey to the metrics.
-        # Then, simply plot all of them in the same folder.
-
         if model.model.conf.bev_mapper.multiscale:
+            # Multiply probability volumes of all branches to "chain" results
 
-            # Take all the score volumes and add them up.
-
-            scores = [pred[k]["scores_unmasked"] for k in pred if isinstance(k, (float, int))]
+            if model.cfg.data.add_map_mask:
+                scores = [
+                    pred[k]["scores_unmasked"]
+                    for k in pred
+                    if isinstance(k, (float, int))
+                ]
+            else:
+                scores = [pred["scores"] for k in pred if isinstance(k, (float, int))]
             crop_size_meters = model.cfg.data.crop_size_meters[0]
-            upsample_ppm = model.cfg.data.pixel_per_meter
+            upsample_ppm = int(max(model.model.conf.pixel_per_meter))
             h = w = (
                 crop_size_meters * 2 * upsample_ppm
             )  # max([score.shape[-2] for score in scores])
@@ -340,8 +351,9 @@ def evaluate_single_image(
                 for score in scores
             ]
 
-            if model.cfg.data.add_map_mask == True:
-                map_mask = batch["map_mask"][32.0]
+            if model.cfg.data.add_map_mask:
+                # map_mask = batch["map_mask"][32.0]
+                map_mask = pred[32.0]["map_mask"]
                 scores = [
                     score.masked_fill_(~map_mask[..., None], -np.inf)
                     for score in scores
@@ -360,16 +372,82 @@ def evaluate_single_image(
             map_T_max = Transform2D.from_degrees(yaw_max.unsqueeze(-1), ij_max)
             pred["chain"] = {}
             pred["chain"]["map_T_cam_max"] = map_T_max
-            pred["chain"]["tile_T_cam_max"] = Transform2D.from_pixels(
-                map_T_max, 1 / upsample_ppm
+            pred["chain"]["tile_T_cam_max"] = tile_T_cam_max_chained = (
+                Transform2D.from_pixels(map_T_max, 1 / upsample_ppm)
             )
             pred["chain"]["log_probs"] = log_probs_chained
-            batch["tile_T_cam"]["chain"] = batch["tile_T_cam"][32.0]
+            batch["tile_T_cam"]["chain"] = batch["tile_T_cam"][
+                model.model.conf.bev_mapper.z_max[0]
+            ]
             # batch["features_map"]["chain"] = batch["features_map"][32.0]
             # features_bev, valid_bev, pixel_Scales, semantic_map have to be added for visualization
             # for now, we skip visualization, and just focus on the numbers
             # if "tile_t_gps" in batch:
             # batch["tile_t_gps"]["chain"] = batch["tile_t_gps"][32.0]
+
+            if model.model.conf.grid_refinement:
+                delta_p = 0.5  # m
+                range_p = 2  # m
+                delta_r = 1.0  # deg
+                range_r = 5.0  # deg
+
+                poses = []
+                pose_scores_list = []
+                for idx, k in enumerate(model.model.conf.bev_mapper.z_max):
+
+                    resolution = 1 / model.model.conf.pixel_per_meter[idx]
+                    map_T_cam_max_chained = Transform2D.to_pixels(
+                        tile_T_cam_max_chained, resolution
+                    )
+                    bev_ij_pts = model.model.bev_mapper.cam_xy_pts[idx] / resolution
+                    bev_ij_pts = Transform2D(torch.Tensor([-90, 0, 0])) @ bev_ij_pts
+
+                    # Perform grid refinement
+                    _, _, map_T_cam_samples, pose_scores = (
+                        grid_refinement_orienternet_batched(
+                            map_T_cam_max_chained._data,
+                            pred[k]["features_map"],
+                            pred[k]["features_bev"],
+                            bev_ij_pts.to(pred[k]["features_map"]),
+                            pred[k]["valid_bev"],
+                            batch.get(
+                                "map_mask",
+                                {
+                                    k: torch.ones(
+                                        (pred[k]["features_map"][:, 0, ...].shape)
+                                    ).to(pred[k]["valid_bev"])
+                                },
+                            )[k],
+                            delta_p / resolution,
+                            range_p / resolution,
+                            delta_r,
+                            range_r,
+                        )
+                    )
+                    # convert pose scores to probabilities
+                    pose_log_probs = torch.nn.functional.log_softmax(
+                        pose_scores.flatten()
+                    )
+                    poses.append(map_T_cam_samples)
+                    pose_scores_list.append(pose_log_probs)
+
+                # Sum up log probs. Then,
+                # chained_pose_scores = [pose_log_probs for pose_log_probs in pose_scores_list]
+                chained_pose_scores = torch.stack(pose_scores_list).sum(0)
+                _, best_idx = torch.max(chained_pose_scores, dim=-1)
+                map_T_cam_chain_refined = poses[0].squeeze(0)[best_idx].unsqueeze(0)
+
+                pred["chain_refined"] = {}
+                pred["chain_refined"]["map_T_cam_max"] = Transform2D(
+                    map_T_cam_chain_refined
+                )
+                tile_T_cam_chain_refined = Transform2D.from_pixels(
+                    Transform2D(map_T_cam_chain_refined), 1 / upsample_ppm
+                )
+                pred["chain_refined"]["tile_T_cam_max"] = tile_T_cam_chain_refined
+                batch["tile_T_cam"]["chain_refined"] = batch["tile_T_cam"][
+                    model.model.conf.bev_mapper.z_max[0]
+                ]
 
         results = metrics(pred, batch)
         if callback is not None:
