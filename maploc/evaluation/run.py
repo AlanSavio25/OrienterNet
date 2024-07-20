@@ -329,7 +329,7 @@ def evaluate_single_image(
 
             scores = [pred[k]["scores_unmasked"] for k in pred if isinstance(k, (float, int))]
             crop_size_meters = model.cfg.data.crop_size_meters[0]
-            upsample_ppm = 2
+            upsample_ppm = model.cfg.data.pixel_per_meter
             h = w = (
                 crop_size_meters * 2 * upsample_ppm
             )  # max([score.shape[-2] for score in scores])
