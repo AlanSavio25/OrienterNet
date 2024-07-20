@@ -264,7 +264,7 @@ class OrienterNet(BaseModel):
                 range_p = 2  # m
                 delta_r = 1.0  # deg
                 range_r = 5.0  # deg
-                map_T_cam_max_refined, _, _ = grid_refinement_orienternet_batched(
+                map_T_cam_max_refined, _, _, _ = grid_refinement_orienternet_batched(
                     map_T_cam_max._data,
                     f_map,
                     f_bev,

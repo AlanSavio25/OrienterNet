@@ -199,7 +199,7 @@ def grid_refinement_orienternet(
     map_T_cam_refined = map_T_cam_samples[best_idx[None]][0]._data
     scores = scores.reshape(grid_r.shape, -1)
 
-    return map_T_cam_refined, score_refined, scores
+    return map_T_cam_refined, score_refined, map_T_cam_samples._data, scores
 
 
 pose_scoring_many_orienternet = torch.vmap(
