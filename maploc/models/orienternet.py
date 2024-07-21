@@ -199,7 +199,7 @@ class OrienterNet(BaseModel):
                     align_corners=False,
                 ).squeeze(1)
                 map_mask = ~torch.isnan(nan_mask)
-            pred[k]["map_mask"] = map_mask if "map_mask" in data else None
+            # pred[k]["map_mask"] = map_mask if "map_mask" in data else None
 
             # OrienterNet's Exhaustive Matching
 
@@ -227,7 +227,7 @@ class OrienterNet(BaseModel):
             ):
                 log_prior = pred[k]["semantic_map"]["log_prior"][0]
                 scores = scores + log_prior.unsqueeze(-1)
-            scores_unmasked = scores.clone()
+            # scores_unmasked = scores.clone()
             # pred["scores_unmasked"] = scores.clone()
             scores.masked_fill_(~map_mask[..., None], -np.inf)
             if "yaw_prior" in data:  # TODO: refactor
@@ -299,7 +299,7 @@ class OrienterNet(BaseModel):
                     "features_bev": f_bev,
                     "valid_bev": valid_bev.squeeze(1),
                     "scores": scores,
-                    "scores_unmasked": scores_unmasked,
+                    # "scores_unmasked": scores_unmasked,
                     "log_probs": log_probs,
                 }
             )
