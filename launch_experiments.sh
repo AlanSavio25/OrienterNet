@@ -1,7 +1,7 @@
 #!/bin/bash
-#SBATCH --job-name=11_3_snap_fine
-#SBATCH --output=sbatch_outputs/11_3_snap_fine.out
-#SBATCH --time=24:00:00
+#SBATCH --job-name=11_6_snap_multiscale_SPLITIMAGE
+#SBATCH --output=sbatch_outputs/11_6_snap_multiscale_SPLITIMAGE.out
+#SBATCH --time=48:00:00
 #SBATCH --ntasks-per-node=18
 #SBATCH --mem-per-cpu=18G
 #SBATCH --account=ls_polle
@@ -879,29 +879,106 @@
 
 
 
-# 11_3 => 1_mpp map but fine model 
-#  SNAP fine - 1x - 0.5mpp. Map at 1mpp
-EXPERIMENT_NAME="11_3_snap_fine"
+# # 11_3 => 1_mpp map but fine model 
+# #  SNAP fine - 1x - 0.5mpp. Map at 1mpp
+# EXPERIMENT_NAME="11_3_snap_fine"
+# python -m maploc.train experiment.name=$EXPERIMENT_NAME \
+#         data.tiles_filename=tiles_1mpp.pkl \
+#         data.return_multiscale=True \
+#         data.crop_size_meters=[64] \
+#         data.max_init_error=[48] \
+#         data.pixel_per_meter=1 \
+#         data.mask_pad=[2] \
+#         data.add_map_mask=True \
+#         model.map_encoder.backbone.output_scales=[0] \
+#         model.map_encoder.unary_prior=False \
+#         model.multiscale=True \
+#         model.map_encoder.backbone.scale_factor=[2] \
+#         model.bev_mapper.image_encoder.backbone.encoder=resnet18 \
+#         model.bev_mapper.image_encoder.backbone.output_dim=128 \
+#         model.pixel_per_meter=[2] \
+#         model.bev_mapper.grid_cell_size=[0.5] \
+#         model.bev_mapper.x_max=[32.0] \
+#         model.bev_mapper.z_max=[32.0] \
+#         training.lr=0.0001 \
+#         training.trainer.max_steps=320000 \
+#         data.loading.train.batch_size=4
+
+
+# # 11_4 => MULTISCALE model.
+# EXPERIMENT_NAME="11_4_snap_multiscale_SPLIT"
+# python -m maploc.train experiment.name=$EXPERIMENT_NAME \
+#         data.tiles_filename=tiles_1mpp.pkl \
+#         data.return_multiscale=True \
+#         data.crop_size_meters=[64,224] \
+#         data.max_init_error=[48,192] \
+#         data.pixel_per_meter=1 \
+#         data.mask_pad=[2,4] \
+#         data.add_map_mask=True \
+#         model.multiscale=True \
+#         model.map_encoder.backbone.output_scales=[0,0] \
+#         model.map_encoder.backbone.scale_factor=[2,0.5] \
+#         model.map_encoder.backbone.num_branches=2 \
+#         model.bev_mapper.image_encoder.backbone.encoder=resnet18 \
+#         model.bev_mapper.image_encoder.backbone.output_dim=128 \
+#         model.bev_mapper.image_encoder.backbone.num_branches=2 \
+#         model.pixel_per_meter=[2.0,0.5] \
+#         model.bev_mapper.grid_cell_size=[0.5,2] \
+#         model.bev_mapper.x_max=[32.0,128.0] \
+#         model.bev_mapper.z_max=[32.0,128.0] \
+#         training.lr=5e-5 \
+#         training.trainer.max_steps=320000 \
+#         data.loading.train.batch_size=4 \
+
+# # 11_5 => MULTISCALE model. 
+# EXPERIMENT_NAME="11_5_snap_multiscale_SPLITMAP"
+# python -m maploc.train experiment.name=$EXPERIMENT_NAME \
+#         data.tiles_filename=tiles_1mpp.pkl \
+#         data.return_multiscale=True \
+#         data.crop_size_meters=[64,224] \
+#         data.max_init_error=[48,192] \
+#         data.pixel_per_meter=1 \
+#         data.mask_pad=[2,4] \
+#         data.add_map_mask=True \
+#         model.multiscale=True \
+#         model.map_encoder.backbone.output_scales=[0,0] \
+#         model.map_encoder.backbone.scale_factor=[2,0.5] \
+#         model.map_encoder.backbone.num_branches=2 \
+#         model.bev_mapper.image_encoder.backbone.encoder=resnet18 \
+#         model.bev_mapper.image_encoder.backbone.output_dim=256 \
+#         model.bev_mapper.image_encoder.backbone.num_branches=1 \
+#         model.pixel_per_meter=[2.0,0.5] \
+#         model.bev_mapper.grid_cell_size=[0.5,2] \
+#         model.bev_mapper.x_max=[32.0,128.0] \
+#         model.bev_mapper.z_max=[32.0,128.0] \
+#         training.lr=5e-5 \
+#         training.trainer.max_steps=320000 \
+#         data.loading.train.batch_size=4 \
+
+# 11_6 => MULTISCALE model. 
+EXPERIMENT_NAME="11_6_snap_multiscale_SPLITIMAGE"
 python -m maploc.train experiment.name=$EXPERIMENT_NAME \
         data.tiles_filename=tiles_1mpp.pkl \
         data.return_multiscale=True \
-        data.crop_size_meters=[64] \
-        data.max_init_error=[48] \
+        data.crop_size_meters=[64,224] \
+        data.max_init_error=[48,192] \
         data.pixel_per_meter=1 \
-        data.mask_pad=[2] \
+        data.mask_pad=[2,4] \
         data.add_map_mask=True \
-        model.map_encoder.backbone.output_scales=[0] \
-        model.map_encoder.unary_prior=False \
         model.multiscale=True \
-        model.map_encoder.backbone.scale_factor=[2] \
+        model.map_encoder.backbone.output_scales=[0,0] \
+        model.map_encoder.backbone.scale_factor=[2,0.5] \
+        model.map_encoder.backbone.num_branches=1 \
         model.bev_mapper.image_encoder.backbone.encoder=resnet18 \
         model.bev_mapper.image_encoder.backbone.output_dim=128 \
-        model.pixel_per_meter=[2] \
-        model.bev_mapper.grid_cell_size=[0.5] \
-        model.bev_mapper.x_max=[32.0] \
-        model.bev_mapper.z_max=[32.0] \
-        training.lr=0.0001 \
+        model.bev_mapper.image_encoder.backbone.num_branches=2 \
+        model.pixel_per_meter=[2.0,0.5] \
+        model.bev_mapper.grid_cell_size=[0.5,2] \
+        model.bev_mapper.x_max=[32.0,128.0] \
+        model.bev_mapper.z_max=[32.0,128.0] \
+        training.lr=5e-5 \
         training.trainer.max_steps=320000 \
-        data.loading.train.batch_size=4
+        data.loading.train.batch_size=4 \
+
 
 exit 0
