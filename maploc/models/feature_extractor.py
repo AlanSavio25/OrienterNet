@@ -18,6 +18,10 @@ from .utils import checkpointed
 
 
 class ScaleBlock(nn.Module):
+    """This module is similar to a decoder except it has no skip connections.
+    We use this for {up,down}sampling the final output of the map encoder to match BEV resolution
+    """
+
     def __init__(
         self,
         inp,
@@ -103,6 +107,7 @@ class FeatureExtractor(BaseModel):
     default_conf = {
         "pretrained": True,
         # "max_pool_ksize": 1,
+        "num_branches": 1,
         "scale_factor": 1,
         "input_dim": 3,
         "output_scales": [0, 2, 4],  # what scales to adapt and output
@@ -209,14 +214,17 @@ class FeatureExtractor(BaseModel):
             Block = checkpointed(DecoderBlock, do=conf.checkpointed)
             norm = eval(conf.decoder_norm) if conf.decoder_norm else None  # noqa
 
-            previous = skip_dims[-1]
-            decoder = []
-            for out, skip in zip(conf.decoder, skip_dims[:-1][::-1]):
-                decoder.append(
-                    Block(previous, skip, out, norm=norm, padding=conf.padding)
-                )
-                previous = out
-            self.decoder = nn.ModuleList(decoder)
+            decoders = []
+            for _ in range(conf.num_branches):
+                previous = skip_dims[-1]
+                decoder = []
+                for out, skip in zip(conf.decoder, skip_dims[:-1][::-1]):
+                    decoder.append(
+                        Block(previous, skip, out, norm=norm, padding=conf.padding)
+                    )
+                    previous = out
+                decoders.append(nn.ModuleList(decoder))
+            self.decoders = nn.ModuleList(decoders)
 
         scale_factors = conf.scale_factor
         scale_blocks = []
@@ -255,9 +263,18 @@ class FeatureExtractor(BaseModel):
             features = block(features)
             skip_features.append(features)
 
+        # We always have a single output map (single scale) per forward pass
+        # module_idx acts as a branch selector.
+        # Each forward pass through this Feature Extractor model goes through 1 branch only.
+        module_idx = data["out_scale_idx"]
+
         if self.conf.decoder:
             pre_features = [skip_features[-1]]
-            for block, skip in zip(self.decoder, skip_features[:-1][::-1]):
+            if self.conf.num_branches == 1:
+                decoder = self.decoders[0]
+            else:
+                decoder = self.decoders[module_idx]
+            for block, skip in zip(decoder, skip_features[:-1][::-1]):
                 pre_features.append(block(pre_features[-1], skip))
             pre_features = pre_features[::-1]  # fine to coarse
         else:
@@ -266,8 +283,6 @@ class FeatureExtractor(BaseModel):
         out_features = []
         out_scales = self.conf.output_scales
 
-        # We always have a single output map (single scale) per forward pass
-        module_idx = data["out_scale_idx"]
         out_scale = out_scales[module_idx]
         scale_block = self.scale_blocks[module_idx]
         adapt = self.adaptation[module_idx]

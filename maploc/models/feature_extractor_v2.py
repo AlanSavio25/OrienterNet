@@ -111,6 +111,7 @@ class FeatureExtractor(BaseModel):
         "decoder_norm": "nn.BatchNorm2d",  # normalization ind decoder blocks
         "do_average_pooling": False,
         "checkpointed": False,  # whether to use gradient checkpointing
+        "num_branches": 1,
     }
     mean = [0.485, 0.456, 0.406]
     std = [0.229, 0.224, 0.225]
@@ -174,7 +175,13 @@ class FeatureExtractor(BaseModel):
 
         # Decoder
         norm = eval(conf.decoder_norm) if conf.decoder_norm else None  # noqa
-        self.decoder = FPN(self.skip_dims, out_channels=conf.output_dim, norm=norm)
+
+        self.decoders = nn.ModuleList(
+            [
+                FPN(self.skip_dims, out_channels=conf.output_dim, norm=norm)
+                for _ in range(conf.num_branches)
+            ]
+        )
 
         logger.debug(
             "Built feature extractor with layers {name:dim:stride}:\n"
@@ -187,6 +194,6 @@ class FeatureExtractor(BaseModel):
         image = (image - self.mean_[:, None, None]) / self.std_[:, None, None]
 
         skip_features = self.encoder(image)
-        output = self.decoder(skip_features)
+        output = torch.cat([decoder(skip_features) for decoder in self.decoders], -3)
         pred = {"feature_maps": [output], "skip_features": skip_features}
         return pred
