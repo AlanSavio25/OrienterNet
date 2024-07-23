@@ -125,8 +125,14 @@ if __name__ == "__main__":
     parser.add_argument("--cfg_path", nargs="*", type=Path)
     parser.add_argument("--chain", action="store_true")
     parser.add_argument("--singlemodel_randomscale", action="store_true")
+    parser.add_argument(
+        "--chain_weights", nargs="+", type=str, default=['1', '1', '1']
+    )
     parser.add_argument("dotlist", nargs="*")
     args = parser.parse_args()
+
+    chain_weights = tuple(map(float, args.chain_weights))
+
     cfg = OmegaConf.from_cli(args.dotlist)
     run(
         args.split,
@@ -139,5 +145,6 @@ if __name__ == "__main__":
         plot_images=args.plot_images,
         select_images_from_logs=args.select_images_from_logs,
         chain=args.chain,
+        chain_weights=chain_weights,
         singlemodel_randomscale=args.singlemodel_randomscale,
     )

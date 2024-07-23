@@ -72,7 +72,52 @@ def evaluate_single_image_chain(
 ):
 
     # ppm = models[0].model.conf.pixel_per_meter
-    metrics = MetricCollection(models[0].model.metrics())
+    # metrics = MetricCollection(models[0].model.metrics())
+    metrics = {}
+    for model in models:
+        metrics.update(model.model.metrics())
+    # metrics = models[0].model.metrics()
+    if models[0].model.conf.bev_mapper.multiscale:
+        modes = [""]
+        if models[0].model.conf.grid_refinement:
+            modes += ["_refined"]
+        values = [
+            ("0_5", 0.5),
+            ("01", 1.0),
+            ("02", 2.0),
+            ("05", 5.0),
+            ("10", 10.0),
+            ("20", 20.0),
+        ]
+        metrics.update(
+            {
+                "exhaustive_entropy_chain": ExhaustiveEntropy("log_probs", f"chain"),
+            }
+        )
+        for mode in modes:
+            metrics.update(
+                {
+                    f"xy_max_error_chain{mode}": Location2DError(
+                        "tile_T_cam_max", f"chain{mode}"
+                    ),
+                    f"yaw_max_error_chain{mode}": AngleError(
+                        "tile_T_cam_max", f"chain{mode}"
+                    ),
+                }
+            )
+            for val_str, val_float in values:
+                metrics.update(
+                    {
+                        f"xy_recall_{val_str}m_chain{mode}": Location2DRecall(
+                            val_float, "tile_T_cam_max", f"chain{mode}"
+                        ),
+                        f"yaw_recall_{val_str}°_chain{mode}": AngleRecall(
+                            val_float, "tile_T_cam_max", f"chain{mode}"
+                        ),
+                    }
+                )
+
+    metrics = MetricCollection(metrics)
     metrics = metrics.to(models[0].device)
 
     names = []
@@ -83,6 +128,7 @@ def evaluate_single_image_chain(
 
         preds = []
         batches = []
+        # batches_ = []
         if kwargs.get("selected_images"):
             if batch_["name"][0] not in kwargs.get("selected_images"):
                 continue
@@ -104,43 +150,178 @@ def evaluate_single_image_chain(
         else:
             for model in models:
                 # batch_["scale_idx"] = torch.tensor([scale_idx])
-                scale_idx = list(batch_["bev_ppm"].values()).index(
-                    model.model.conf.bev_mapper.pixel_per_meter
-                )
-                batch_["scale_idx"] = torch.tensor([scale_idx])
-                batch = model.transfer_batch_to_device(
-                    deepcopy(batch_), model.device, i
-                )
-                del batch["scale_idx"], batch["z_max"]  # , batch["bev_ppm"]
-                pred = model(batch)
+                # scale_idx = list(batch_["bev_ppm"].values()).index(
+                #     model.model.conf.bev_mapper.pixel_per_meter
+                # )
+                # batch_["scale_idx"] = torch.tensor([scale_idx])
+
+                batch = model.transfer_batch_to_device(batch_, model.device, i)
+                model_batch = deepcopy(batch)
+                # batch has to have only the current model's z_max
+                z_max = model.model.conf.bev_mapper.z_max[
+                    0
+                ]  # in this function, we are only dealing with multiscale models with single z_max
+                for key in model_batch:
+                    if isinstance(model_batch[key], dict) and z_max in model_batch[key]:
+                        for k in [
+                            non_model_k
+                            for non_model_k in model_batch[key]
+                            if non_model_k != z_max
+                        ]:
+                            del model_batch[key][k]
+
+                # del batch["scale_idx"], batch["z_max"]  # , batch["bev_ppm"]
+                pred = model(model_batch)
                 preds.append(pred)
                 batches.append(batch)
+                # batches_.append(batch_)
 
-        scores = [pred["scores"] for pred in preds]
-        h = w = max([score.shape[-2] for score in scores])
+        # scores = [preds[i][k]["scores"] for i,k in enumerate(batch_["z_max"])]
+        # h = w = max([score.shape[-2] for score in scores])
+        # scores = [
+        #     torch.nn.functional.interpolate(
+        #         score.moveaxis(-1, -3), size=(h, w), mode="bilinear"
+        #     ).moveaxis(-3, -1)
+        #     for score in scores
+        # ]
+
+        # log_probs = [log_softmax_spatial(score) for score in scores]
+        # log_probs_chained = log_softmax_spatial(torch.stack(log_probs).sum(0))
+
+        # pred = preds[0]
+        pred = {}
+        for p in preds:
+            pred.update(p)
+        model = models[0]
+        batch = batches[0]
+        # batch_ = batches_[0]
+
+        # Multiply probability volumes of all branches to "chain" results
+
+        if models[0].cfg.data.add_map_mask:
+            scores = [
+                pred[k]["scores_unmasked"] for k in pred if isinstance(k, (float, int))
+            ]
+        else:
+            scores = [pred[k]["scores"] for k in pred if isinstance(k, (float, int))]
+        crop_size_meters = models[0].cfg.data.crop_size_meters[0]
+        upsample_ppm = max(models[0].model.conf.pixel_per_meter)
+        h = w = (
+            crop_size_meters * 2 * upsample_ppm
+        )  # max([score.shape[-2] for score in scores])
         scores = [
             torch.nn.functional.interpolate(
-                score.moveaxis(-1, -3), size=(h, w), mode="bilinear"
+                score.moveaxis(-1, -3), size=(int(h), int(w)), mode="bilinear"
             ).moveaxis(-3, -1)
             for score in scores
         ]
 
-        log_probs = [log_softmax_spatial(score) for score in scores]
-        log_probs_chained = log_softmax_spatial(torch.stack(log_probs).sum(0))
+        if models[0].cfg.data.add_map_mask:
+            # map_mask = batch["map_mask"][32.0]
+            map_mask = pred[min([k for k in pred if isinstance(k, (float, int))])][
+                "map_mask"
+            ]
+            scores = [
+                score.masked_fill_(~map_mask[..., None], -np.inf) for score in scores
+            ]
 
-        pred = preds[0]
-        model = models[0]
-        batch = batches[0]
+        log_probs = [
+            weight * log_softmax_spatial(score)
+            for score, weight in zip(scores, kwargs["chain_weights"])
+        ]
+        log_probs_chained = log_softmax_spatial(torch.stack(log_probs).sum(0))
 
         uvr_max = argmax_xyr(log_probs_chained)
         ij_max = torch.flip(uvr_max[..., :2], dims=[-1])
         yaw_max = 180 - uvr_max[..., -1]
         map_T_max = Transform2D.from_degrees(yaw_max.unsqueeze(-1), ij_max)
-        pred["map_T_cam_max"] = map_T_max
-        pred["tile_T_cam_max"] = Transform2D.from_pixels(
-            map_T_max, 1 / batch["bev_ppm"].item()
+
+        # pred["map_T_cam_max"] = map_T_max
+        # upsample_ppm = max(model.cfg.data.bev_ppm)
+        # pred["tile_T_cam_max"] = Transform2D.from_pixels(
+        #     map_T_max, 1 / upsample_ppm
+        # )
+        # pred["log_probs"] = log_probs_chained
+
+        pred["chain"] = {}
+        pred["chain"]["map_T_cam_max"] = map_T_max
+        pred["chain"]["tile_T_cam_max"] = tile_T_cam_max_chained = (
+            Transform2D.from_pixels(map_T_max, 1 / upsample_ppm)
         )
-        pred["log_probs"] = log_probs_chained
+        pred["chain"]["log_probs"] = log_probs_chained
+        # TODO: this is probably a problem
+
+        batch["tile_T_cam"]["chain"] = batch["tile_T_cam"][
+            models[0].model.conf.bev_mapper.z_max[0]
+        ]
+
+        if model.model.conf.grid_refinement:
+            delta_p = 0.5  # m
+            range_p = 2  # m
+            delta_r = 1.0  # deg
+            range_r = 5.0  # deg
+
+            poses = []
+            pose_scores_list = []
+            for idx, k in enumerate(model.cfg.data.z_max):
+                # for idx, k in enumerate(models[0].model.conf.bev_mapper.z_max):
+
+                resolution = 1 / models[idx].model.conf.pixel_per_meter[0]  # [idx]
+                map_T_cam_max_chained = Transform2D.to_pixels(
+                    tile_T_cam_max_chained, resolution
+                )
+                bev_ij_pts = models[idx].model.bev_mapper.cam_xy_pts[0] / resolution
+                bev_ij_pts = Transform2D(torch.Tensor([-90, 0, 0])) @ bev_ij_pts
+
+                # Perform grid refinement
+                _, _, map_T_cam_samples, pose_scores = (
+                    grid_refinement_orienternet_batched(
+                        map_T_cam_max_chained._data,
+                        preds[idx][k]["features_map"],
+                        preds[idx][k]["features_bev"],
+                        bev_ij_pts.to(preds[idx][k]["features_map"]),
+                        preds[idx][k]["valid_bev"],
+                        batches[idx].get(
+                            "map_mask",
+                            {
+                                k: torch.ones(
+                                    (preds[idx][k]["features_map"][:, 0, ...].shape)
+                                ).to(preds[idx][k]["valid_bev"])
+                            },
+                        )[k],
+                        delta_p / resolution,
+                        range_p / resolution,
+                        delta_r,
+                        range_r,
+                    )
+                )
+                # convert pose scores to probabilities
+                pose_log_probs = torch.nn.functional.log_softmax(pose_scores.flatten())
+                poses.append(map_T_cam_samples)
+                pose_scores_list.append(pose_log_probs)
+
+            # Sum up log probs. Then,
+            # chained_pose_scores = [pose_log_probs for pose_log_probs in pose_scores_list]
+            # TODO: add weighting?
+            pose_scores_list = [
+                weight * score
+                for score, weight in zip(pose_scores_list, kwargs["chain_weights"])
+            ]
+            chained_pose_scores = torch.stack(pose_scores_list).sum(0)
+            _, best_idx = torch.max(chained_pose_scores, dim=-1)
+            map_T_cam_chain_refined = poses[0].squeeze(0)[best_idx].unsqueeze(0)
+
+            pred["chain_refined"] = {}
+            pred["chain_refined"]["map_T_cam_max"] = Transform2D(
+                map_T_cam_chain_refined
+            )
+            tile_T_cam_chain_refined = Transform2D.from_pixels(
+                Transform2D(map_T_cam_chain_refined), 1 / upsample_ppm
+            )
+            pred["chain_refined"]["tile_T_cam_max"] = tile_T_cam_chain_refined
+            batch["tile_T_cam"]["chain_refined"] = batch["tile_T_cam"][
+                model.model.conf.bev_mapper.z_max[0]
+            ]
 
         names += batch["name"]
 
@@ -208,9 +389,8 @@ def evaluate_single_image_chain_RandomScale(
         yaw_max = 180 - uvr_max[..., -1]
         map_T_max = Transform2D.from_degrees(yaw_max.unsqueeze(-1), ij_max)
         pred["map_T_cam_max"] = map_T_max
-        pred["tile_T_cam_max"] = Transform2D.from_pixels(
-            map_T_max, 1 / batch["bev_ppm"].item()
-        )
+        upsample_ppm = max(model.cfg.data.bev_ppm.pixel_per_meter)
+        pred["tile_T_cam_max"] = Transform2D.from_pixels(map_T_max, 1 / upsample_ppm)
         pred["log_probs"] = log_probs_chained
 
         names += batch["name"]
@@ -338,28 +518,35 @@ def evaluate_single_image(
                     if isinstance(k, (float, int))
                 ]
             else:
-                scores = [pred["scores"] for k in pred if isinstance(k, (float, int))]
+                scores = [
+                    pred[k]["scores"] for k in pred if isinstance(k, (float, int))
+                ]
             crop_size_meters = model.cfg.data.crop_size_meters[0]
-            upsample_ppm = int(max(model.model.conf.pixel_per_meter))
+            upsample_ppm = max(model.model.conf.pixel_per_meter)
             h = w = (
                 crop_size_meters * 2 * upsample_ppm
             )  # max([score.shape[-2] for score in scores])
             scores = [
                 torch.nn.functional.interpolate(
-                    score.moveaxis(-1, -3), size=(h, w), mode="bilinear"
+                    score.moveaxis(-1, -3), size=(int(h), int(w)), mode="bilinear"
                 ).moveaxis(-3, -1)
                 for score in scores
             ]
 
             if model.cfg.data.add_map_mask:
                 # map_mask = batch["map_mask"][32.0]
-                map_mask = pred[32.0]["map_mask"]
+                map_mask = pred[min([k for k in pred if isinstance(k, (float, int))])][
+                    "map_mask"
+                ]
                 scores = [
                     score.masked_fill_(~map_mask[..., None], -np.inf)
                     for score in scores
                 ]
 
-            log_probs = [log_softmax_spatial(score) for score in scores]
+            log_probs = [
+                weight * log_softmax_spatial(score)
+                for score, weight in zip(scores, kwargs["chain_weights"])
+            ]
             log_probs_chained = log_softmax_spatial(torch.stack(log_probs).sum(0))
 
             # pred = preds[0]
@@ -433,6 +620,10 @@ def evaluate_single_image(
 
                 # Sum up log probs. Then,
                 # chained_pose_scores = [pose_log_probs for pose_log_probs in pose_scores_list]
+                pose_scores_list = [
+                    weight * score
+                    for score, weight in zip(pose_scores_list, kwargs["chain_weights"])
+                ]
                 chained_pose_scores = torch.stack(pose_scores_list).sum(0)
                 _, best_idx = torch.max(chained_pose_scores, dim=-1)
                 map_T_cam_chain_refined = poses[0].squeeze(0)[best_idx].unsqueeze(0)
