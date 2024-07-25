@@ -13,9 +13,9 @@ training:
     max_steps: 500000
     devices: ${experiment.gpus}
   checkpointing:
-    monitor: "val/xy_max_error"
+    monitor: "loss/total/val"
     save_top_k: 5
-    mode: "max"
+    mode: "min"
 hydra:
   job:
     name: ${experiment.name}
