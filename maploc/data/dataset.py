@@ -175,8 +175,8 @@ class MapLocDataset(torchdata.Dataset):
         if self.cfg.return_multiscale:
             z_max = self.cfg.z_max
             canvas = [
-                tile_manager.query(bbox_tile)
-                for (tile_manager, bbox_tile) in zip(
+                tile_manager.query(bbox_tile_)
+                for (tile_manager, bbox_tile_) in zip(
                     self.tile_managers[scene], bbox_tile
                 )
             ]
@@ -224,12 +224,12 @@ class MapLocDataset(torchdata.Dataset):
             tile_T_cam = (world_T_tile.inv() @ world_T_cam2d).float()
 
         # Map augmentations
-        if self.stage == "train" and not self.cfg.return_multiscale:
+        if self.stage == "train":
             if self.cfg.augmentation.rot90:
-                raster, tile_T_cam = random_rot90(raster, tile_T_cam, canvas.ppm)
+                raster, tile_T_cam = random_rot90(raster, tile_T_cam, ppm)
             if self.cfg.augmentation.flip:
                 image, raster, tile_T_cam, cam_R_gcam = random_flip(
-                    image, raster, tile_T_cam, cam_R_gcam, canvas.ppm
+                    image, raster, tile_T_cam, cam_R_gcam, ppm
                 )
         if self.cfg.return_multiscale:
             map_T_cam = {
@@ -303,9 +303,8 @@ class MapLocDataset(torchdata.Dataset):
                 )
                 data["map_mask"] = torch.rot90(map_mask, -1, dims=(-2, -1))
 
-        if (
-            self.cfg.max_init_error_rotation is not None
-        ):  # does not support multiscale yet
+        if self.cfg.max_init_error_rotation is not None:
+            # does not support multiscale yet
             if "shifts" in self.data:
                 error = self.data["shifts"][idx][-1]
             else:
@@ -350,15 +349,13 @@ class MapLocDataset(torchdata.Dataset):
 
         if self.cfg.return_multiscale:
             canvas = {z: c for z, c in zip(z_max, canvas)}
-            z_max = {z: torch.tensor([z]).float() for z in z_max}
-            bev_ppm = {
+            data["z_max"] = {z: torch.tensor([z]).float() for z in z_max}
+            data["bev_ppm"] = {
                 z: torch.tensor([bev_ppm]).float()
                 for (z, bev_ppm) in zip(z_max, self.cfg.bev_ppm)
             }
             if self.cfg.scale_idx is not None:
                 data["scale_idx"] = self.cfg.scale_idx
-            data["z_max"] = z_max
-            data["bev_ppm"] = bev_ppm
 
         return {
             **data,
