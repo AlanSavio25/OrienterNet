@@ -1,5 +1,6 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates.
 
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +13,7 @@ from omegaconf import DictConfig, OmegaConf, open_dict
 from torchmetrics import MeanMetric, MetricCollection
 
 from maploc.evaluation.viz import plot_example_single
+from maploc.utils.wrappers import Transform2D
 
 from . import logger
 from .models import get_model
@@ -42,7 +44,7 @@ class GenericModule(pl.LightningModule):
     def forward(self, batch):
         return self.model(batch)
 
-    def training_step(self, batch):
+    def training_step(self, batch, batch_idx):
         pred = self(batch)
         losses = self.model.loss(pred, batch)
         self.log_dict(
@@ -50,6 +52,40 @@ class GenericModule(pl.LightningModule):
             prog_bar=True,
             rank_zero_only=True,
         )
+        # Visualize 2 batches of training
+        if batch_idx in [1, 1000]:
+            batch_ = deepcopy(batch)
+            batch_ = move_data_to_device(batch_, "cpu")
+            pred_ = apply_to_collection(
+                pred, (torch.Tensor, Transform2D), lambda x: x.clone().detach()
+            )
+            pred_ = move_data_to_device(pred_, "cpu")
+            plots = []
+            for i in range(len(batch_["image"])):
+                batch_item = apply_to_collection(batch_, torch.Tensor, lambda x: x[i])
+                batch_item = apply_to_collection(
+                    batch_item, Transform2D, lambda x: x[i].unsqueeze(0)
+                )
+                pred_item = apply_to_collection(pred_, torch.Tensor, lambda x: x[i])
+                pred_item = apply_to_collection(
+                    pred_item, Transform2D, lambda x: x[i].unsqueeze(0)
+                )
+                plots += plot_example_single(
+                    0,
+                    self,
+                    pred_item,
+                    batch_item,
+                    results=None,
+                    out_dir=None,
+                    show_gps=True,
+                    return_plots=True,
+                    show_masked_prob=True,
+                )
+            for i, plot in enumerate(plots):
+                self.logger.experiment.add_image(
+                    f"VisualizationsTrain/{batch_idx}/{i}", plot, self.global_step
+                )
+
         return losses["total"].mean()
 
     def validation_step(self, batch, batch_idx):
@@ -80,11 +116,11 @@ class GenericModule(pl.LightningModule):
                 out_dir=None,
                 show_gps=True,
                 return_plots=True,
-                show_masked_prob=True
+                show_masked_prob=True,
             )
             for i, plot in enumerate(plots):
                 self.logger.experiment.add_image(
-                    f"Visualizations/{batch_idx}/{i}", plot, self.global_step
+                    f"VisualizationsVal/{batch_idx}/{i}", plot, self.global_step
                 )
 
     def validation_epoch_start(self, batch):

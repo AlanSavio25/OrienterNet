@@ -1,5 +1,6 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates.
 
+from collections import defaultdict
 import io
 
 import matplotlib.pyplot as plt
@@ -38,6 +39,8 @@ def plot_example_single(
     overlay_bev=True,
 ):
 
+    if results is None:
+        results = defaultdict(float)
     # map_T_cam (or m_T_c): Transform of cam in pixel space.
     # map_t_cam (or m_t_c): only translation.
     # m_r_c (yaw): only rotation. East-facing, counter-clockwise rotation

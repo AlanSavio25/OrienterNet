@@ -92,6 +92,12 @@ class TensorWrapper:
     def detach(self):
         return self.__class__(self._data.detach())
 
+    def clone(self):
+        return self.__class__(self._data.clone())
+
+    def unsqueeze(self, dim):
+        return self.__class__(self._data.unsqueeze(dim))
+
     @classmethod
     def stack(cls, objects: List, dim=0, *, out=None):
         data = torch.stack([obj._data for obj in objects], dim=dim, out=out)
