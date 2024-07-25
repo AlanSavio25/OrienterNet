@@ -227,7 +227,7 @@ class FeatureExtractor(BaseModel):
             self.decoders = nn.ModuleList(decoders)
 
         scale_factors = conf.scale_factor
-        scale_blocks = []
+        # scale_blocks = []
         if isinstance(scale_factors, (int, float)):
             scale_factors = [scale_factors]
 
@@ -246,9 +246,9 @@ class FeatureExtractor(BaseModel):
 
             block = AdaptationBlock(input_, dim)
             adaptation.append(block)
-            scale_blocks.append(ScaleBlock(input_, input_, scale_factors[idx]))
+            # scale_blocks.append(ScaleBlock(input_, input_, scale_factors[idx]))
         self.adaptation = nn.ModuleList(adaptation)
-        self.scale_blocks = nn.ModuleList(scale_blocks)
+        # self.scale_blocks = nn.ModuleList(scale_blocks)
         self.scales = [2**s for s in conf.output_scales]
 
     def _forward(self, data):
@@ -284,9 +284,10 @@ class FeatureExtractor(BaseModel):
         out_scales = self.conf.output_scales
 
         out_scale = out_scales[module_idx]
-        scale_block = self.scale_blocks[module_idx]
+        # scale_block = self.scale_blocks[module_idx]
         adapt = self.adaptation[module_idx]
-        out_features = [adapt(scale_block(pre_features[out_scale]))]
+        # out_features = [adapt(scale_block(pre_features[out_scale]))]
+        out_features = [adapt(pre_features[out_scale])]
 
         pred = {"feature_maps": out_features, "skip_features": skip_features}
         return pred

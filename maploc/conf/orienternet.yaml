@@ -25,7 +25,7 @@ model:
       num_downsample: 3
       decoder: [128, 64, 64]
       padding: replicate
-      num_branches:
+      num_branches: 1
     unary_prior: false
   # aerial_encoder:
   #   backbone:
@@ -39,7 +39,7 @@ model:
       backbone:
         encoder: resnet101
         output_dim: 128
-        num_branches:
+        num_branches: 1
     scale_classifier: mlp
     scale_mlp:
       activation: ReLU
