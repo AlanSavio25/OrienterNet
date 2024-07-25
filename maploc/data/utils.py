@@ -1,6 +1,6 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates.
 
-from typing import Tuple
+from typing import Tuple, Union
 
 import numpy as np
 import torch
@@ -20,32 +20,61 @@ def crop_map(raster, xy, size, seed=None):
 
 
 def random_rot90(
-    raster: torch.Tensor,
-    tile_T_cam: Transform2D,
-    pixels_per_meter: float,
+    raster: Union[torch.Tensor, dict],
+    tile_T_cam: Union[Transform2D, dict],
+    pixels_per_meter: Union[float, dict],
     seed: int = None,
 ):
     rot = np.random.RandomState(seed).randint(0, 4)
-    raster = torch.rot90(raster, rot, dims=(-2, -1))
 
-    # Rotate the camera position around tile's center
-    map_t_center = torch.tensor(raster.shape[-2:]) / 2.0
-    tile_t_center = Transform2D.from_pixels(map_t_center, 1 / pixels_per_meter).float()
-    center_t_cam = tile_T_cam.t - tile_t_center
-    R = Transform2D.from_degrees(torch.tensor([rot * 90]), torch.zeros(2)).float()
-    center_t_rotcam = R @ center_t_cam.T.float()
-    tile_t_rotcam = center_t_rotcam.squeeze(0) + tile_t_center
-    tile_r_rotcam = (tile_T_cam.angle + rot * 90) % 360
-    tile_T_rotcam = Transform2D.from_degrees(tile_r_rotcam, tile_t_rotcam).float()
+    if rot == 0:
+        return raster, tile_T_cam
+
+    multiscale = isinstance(raster, dict)
+
+    if multiscale:
+
+        tile_T_rotcam = {}
+        for z in raster.keys():
+            raster[z] = torch.rot90(raster[z], rot, dims=(-2, -1))
+            # Rotate the camera position around tile's center
+            map_t_center = torch.tensor(raster[z].shape[-2:]) / 2.0
+            tile_t_center = Transform2D.from_pixels(
+                map_t_center, 1 / pixels_per_meter[z]
+            ).float()
+            center_t_cam = tile_T_cam[z].t - tile_t_center
+            R = Transform2D.from_degrees(
+                torch.tensor([rot * 90]), torch.zeros(2)
+            ).float()
+            center_t_rotcam = R @ center_t_cam.T.float()
+            tile_t_rotcam = center_t_rotcam.squeeze(0) + tile_t_center
+            tile_r_rotcam = (tile_T_cam[z].angle + rot * 90) % 360
+            tile_T_rotcam[z] = Transform2D.from_degrees(
+                tile_r_rotcam, tile_t_rotcam
+            ).float()
+    else:
+        raster = torch.rot90(raster, rot, dims=(-2, -1))
+        # Rotate the camera position around tile's center
+        map_t_center = torch.tensor(raster.shape[-2:]) / 2.0
+        tile_t_center = Transform2D.from_pixels(
+            map_t_center, 1 / pixels_per_meter
+        ).float()
+        center_t_cam = tile_T_cam.t - tile_t_center
+        R = Transform2D.from_degrees(torch.tensor([rot * 90]), torch.zeros(2)).float()
+        center_t_rotcam = R @ center_t_cam.T.float()
+        tile_t_rotcam = center_t_rotcam.squeeze(0) + tile_t_center
+        tile_r_rotcam = (tile_T_cam.angle + rot * 90) % 360
+        tile_T_rotcam = Transform2D.from_degrees(tile_r_rotcam, tile_t_rotcam).float()
+
     return raster, tile_T_rotcam
 
 
 def random_flip(
     image: torch.Tensor,
-    raster: torch.Tensor,
-    tile_T_cam: Transform2D,
+    raster: Union[torch.Tensor, dict],
+    tile_T_cam: Union[Transform2D, dict],
     cam_R_gcam: torch.Tensor,
-    pixels_per_meter: float,
+    pixels_per_meter: Union[float, dict],
     seed: int = None,
 ):
     state = np.random.RandomState(seed)
@@ -60,20 +89,51 @@ def random_flip(
     R = Rotation.from_euler("z", -2 * roll, degrees=True).as_matrix()
     gcam_R_cam = torch.tensor(R) @ gcam_R_cam
 
-    map_t_center = torch.tensor(raster.shape[-2:]) / 2.0
-    tile_t_center = Transform2D.from_pixels(map_t_center, 1 / pixels_per_meter)
-    center_t_cam = tile_T_cam.t - tile_t_center
-    if state.rand() > 0.5:  # flip x
-        raster = torch.flip(raster, (-1,))
-        tile_r_flipcam = 180 - tile_T_cam.angle
-        center_t_flipcam = center_t_cam * torch.tensor([-1, 1])
-    else:  # flip y
-        tile_r_flipcam = -tile_T_cam.angle
-        raster = torch.flip(raster, (-2,))
-        center_t_flipcam = center_t_cam * torch.tensor([1, -1])
-    tile_t_flipcam = center_t_flipcam + tile_t_center
-    tile_T_flipcam = Transform2D.from_degrees(tile_r_flipcam % 360, tile_t_flipcam)
-    return image, raster, tile_T_flipcam.float(), gcam_R_cam.T
+    multiscale = isinstance(raster, dict)
+
+    if multiscale:
+
+        tile_T_flipcam = {}
+        for z in raster.keys():
+
+            map_t_center = torch.tensor(raster[z].shape[-2:]) / 2.0
+            tile_t_center = Transform2D.from_pixels(
+                map_t_center, 1 / pixels_per_meter[z]
+            )
+            center_t_cam = tile_T_cam[z].t - tile_t_center
+            if state.rand() > 0.5:  # flip x
+                raster[z] = torch.flip(raster[z], (-1,))
+                tile_r_flipcam = 180 - tile_T_cam[z].angle
+                center_t_flipcam = center_t_cam * torch.tensor([-1, 1])
+            else:  # flip y
+                tile_r_flipcam = -tile_T_cam[z].angle
+                raster[z] = torch.flip(raster[z], (-2,))
+                center_t_flipcam = center_t_cam * torch.tensor([1, -1])
+            tile_t_flipcam = center_t_flipcam + tile_t_center
+            tile_T_flipcam[z] = Transform2D.from_degrees(
+                tile_r_flipcam % 360, tile_t_flipcam
+            )
+
+    else:
+        # This will be deprecated when dict type becomes permanent
+
+        map_t_center = torch.tensor(raster.shape[-2:]) / 2.0
+        tile_t_center = Transform2D.from_pixels(map_t_center, 1 / pixels_per_meter)
+        center_t_cam = tile_T_cam.t - tile_t_center
+        if state.rand() > 0.5:  # flip x
+            raster = torch.flip(raster, (-1,))
+            tile_r_flipcam = 180 - tile_T_cam.angle
+            center_t_flipcam = center_t_cam * torch.tensor([-1, 1])
+        else:  # flip y
+            tile_r_flipcam = -tile_T_cam.angle
+            raster = torch.flip(raster, (-2,))
+            center_t_flipcam = center_t_cam * torch.tensor([1, -1])
+        tile_t_flipcam = center_t_flipcam + tile_t_center
+        tile_T_flipcam = Transform2D.from_degrees(
+            tile_r_flipcam % 360, tile_t_flipcam
+        ).float()
+
+    return image, raster, tile_T_flipcam, gcam_R_cam.T
 
 
 def decompose_rotmat(R_c2w):
