@@ -1,6 +1,6 @@
 #!/bin/bash
-#SBATCH --job-name=11_8_snap_coarse_128m_2mpp
-#SBATCH --output=sbatch_outputs/11_8_snap_coarse_128m_2mpp.out
+#SBATCH --job-name=11_9_snap_fine
+#SBATCH --output=sbatch_outputs/11_9_snap_fine.out
 #SBATCH --time=48:00:00
 #SBATCH --ntasks-per-node=18
 #SBATCH --mem-per-cpu=18G
@@ -982,39 +982,14 @@
 
 # # 11_1 => Re-running 9_7. We might have an issue somewhere
 # #  SNAP fine - 1x - 0.5mpp
-# EXPERIMENT_NAME="11_7_snap_fine"
-# python -m maploc.train experiment.name=$EXPERIMENT_NAME \
-#         data.tiles_filename=tiles.pkl \
-#         data.return_multiscale=True \
-#         data.crop_size_meters=[64] \
-#         data.max_init_error=[48] \
-#         data.pixel_per_meter=2 \
-#         data.mask_pad=[1] \
-#         data.add_map_mask=True \
-#         model.map_encoder.backbone.output_scales=[0] \
-#         model.map_encoder.unary_prior=False \
-#         model.multiscale=True \
-#         model.map_encoder.backbone.scale_factor=[1] \
-#         model.bev_mapper.image_encoder.backbone.encoder=resnet18 \
-#         model.bev_mapper.image_encoder.backbone.output_dim=128 \
-#         model.pixel_per_meter=[2] \
-#         model.bev_mapper.grid_cell_size=[0.5] \
-#         model.bev_mapper.x_max=[32.0] \
-#         model.bev_mapper.z_max=[32.0] \
-#         training.lr=0.0001 \
-#         training.trainer.max_steps=320000 \
-#         data.loading.train.batch_size=4
-
-# 11_2 => Re-running 9_9. We might have an issue somewhere
-#  SNAP fine - 1x - 0.5mpp
-EXPERIMENT_NAME="11_8_snap_coarse_128m_2mpp"
+EXPERIMENT_NAME="11_9_snap_fine"
 python -m maploc.train experiment.name=$EXPERIMENT_NAME \
-        data.tiles_filename=tiles_2mpp.pkl \
+        data.tiles_filename=tiles.pkl \
         data.return_multiscale=True \
-        data.crop_size_meters=[256] \
-        data.max_init_error=[192] \
-        data.pixel_per_meter=0.5 \
-        data.mask_pad=[4] \
+        data.crop_size_meters=[64] \
+        data.max_init_error=[48] \
+        data.pixel_per_meter=2 \
+        data.mask_pad=[1] \
         data.add_map_mask=True \
         model.map_encoder.backbone.output_scales=[0] \
         model.map_encoder.unary_prior=False \
@@ -1022,13 +997,37 @@ python -m maploc.train experiment.name=$EXPERIMENT_NAME \
         model.map_encoder.backbone.scale_factor=[1] \
         model.bev_mapper.image_encoder.backbone.encoder=resnet18 \
         model.bev_mapper.image_encoder.backbone.output_dim=128 \
-        model.pixel_per_meter=[0.5] \
-        model.bev_mapper.grid_cell_size=[2] \
-        model.bev_mapper.x_max=[128.0] \
-        model.bev_mapper.z_max=[128.0] \
-        training.lr=5e-5 \
+        model.pixel_per_meter=[2] \
+        model.bev_mapper.grid_cell_size=[0.5] \
+        model.bev_mapper.x_max=[32.0] \
+        model.bev_mapper.z_max=[32.0] \
+        training.lr=0.0001 \
         training.trainer.max_steps=320000 \
         data.loading.train.batch_size=4
 
+# 11_2 => Re-running 9_9. We might have an issue somewhere
+#  SNAP fine - 1x - 0.5mpp
+# EXPERIMENT_NAME="11_10_snap_coarse_128m_2mpp"
+# python -m maploc.train experiment.name=$EXPERIMENT_NAME \
+#         data.tiles_filename=tiles_2mpp.pkl \
+#         data.return_multiscale=True \
+#         data.crop_size_meters=[256] \
+#         data.max_init_error=[192] \
+#         data.pixel_per_meter=0.5 \
+#         data.mask_pad=[4] \
+#         data.add_map_mask=True \
+#         model.map_encoder.backbone.output_scales=[0] \
+#         model.map_encoder.unary_prior=False \
+#         model.multiscale=True \
+#         model.map_encoder.backbone.scale_factor=[1] \
+#         model.bev_mapper.image_encoder.backbone.encoder=resnet18 \
+#         model.bev_mapper.image_encoder.backbone.output_dim=128 \
+#         model.pixel_per_meter=[0.5] \
+#         model.bev_mapper.grid_cell_size=[2] \
+#         model.bev_mapper.x_max=[128.0] \
+#         model.bev_mapper.z_max=[128.0] \
+#         training.lr=5e-5 \
+#         training.trainer.max_steps=320000 \
+#         data.loading.train.batch_size=4
 
 exit 0
