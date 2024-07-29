@@ -101,7 +101,7 @@ def random_flip(
                 map_t_center, 1 / pixels_per_meter[z]
             )
             center_t_cam = tile_T_cam[z].t - tile_t_center
-            if state.rand() > 0.5:  # flip x
+            if state.rand() > 0.5:  # flip x # TODO: change this. The decision has to be fixed same for both maps
                 raster[z] = torch.flip(raster[z], (-1,))
                 tile_r_flipcam = 180 - tile_T_cam[z].angle
                 center_t_flipcam = center_t_cam * torch.tensor([-1, 1])
