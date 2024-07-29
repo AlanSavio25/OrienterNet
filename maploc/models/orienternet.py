@@ -370,6 +370,7 @@ class OrienterNet(BaseModel):
             loss[f"nll_{int(k)}"] = nll * scaling_factor
 
             if self.training and self.conf.add_temperature:
+                # We add log σ as a weight penalty. Since we predict temperature T (= log σ²) => log σ = T/2
                 loss[f"temperature_{int(k)}"] = (
                     self.temperature[i].expand(len(nll)) / 2.0
                 )
