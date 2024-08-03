@@ -1,7 +1,7 @@
 #!/bin/bash
-#SBATCH --job-name=11_11_snap_coarse_128m_2mpp_48m
-#SBATCH --output=sbatch_outputs/11_11_snap_coarse_128m_2mpp_48m.out
-#SBATCH --time=36:00:00
+#SBATCH --job-name=12_0_snap_coarse_256m
+#SBATCH --output=sbatch_outputs/12_0_snap_coarse_256m.out
+#SBATCH --time=48:00:00
 #SBATCH --ntasks-per-node=18
 #SBATCH --mem-per-cpu=18G
 #SBATCH --account=ls_polle
@@ -1056,5 +1056,31 @@
 #         training.trainer.max_steps=320000 \
 #         data.loading.train.batch_size=4
 
+
+# 11_10, added map augmentations
+# SNAP coarse 2mpp
+EXPERIMENT_NAME="12_0_snap_coarse_256m"
+python -m maploc.train experiment.name=$EXPERIMENT_NAME \
+        data.tiles_filename=tiles_2mpp.pkl \
+        data.return_multiscale=True \
+        data.crop_size_meters=[512] \
+        data.max_init_error=[384] \
+        data.pixel_per_meter=0.5 \
+        data.mask_pad=[8] \
+        data.add_map_mask=True \
+        model.map_encoder.backbone.output_scales=[1] \
+        model.map_encoder.unary_prior=False \
+        model.multiscale=True \
+        model.map_encoder.backbone.scale_factor=[1] \
+        model.bev_mapper.image_encoder.backbone.encoder=resnet18 \
+        model.bev_mapper.image_encoder.backbone.output_dim=128 \
+        model.pixel_per_meter=[0.25] \
+        model.bev_mapper.grid_cell_size=[4] \
+        model.bev_mapper.x_max=[256.0] \
+        model.bev_mapper.z_max=[256.0] \
+        training.lr=5e-5 \
+        training.trainer.max_steps=320000 \
+        data.loading.train.batch_size=1
+        
 
 exit 0
