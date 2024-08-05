@@ -48,10 +48,18 @@ def plot_example_single(
 
     scene, name = data["scene"], data["name"]
 
-    for index, k in enumerate(model.model.conf.bev_mapper.z_max):
+    keys = list(model.model.conf.bev_mapper.z_max)
+    if "xy_max_error_chain" in results:
+        keys += ["chain"]
+
+    for index, k in enumerate(keys):
 
         tile_T_cam_gt = data["tile_T_cam"][k]
-        bev_ppm = model.model.conf.pixel_per_meter[index]
+        # When chaining, we choose map and bev of the finest resolution, because pred outputs in finest map space.
+        if k == "chain":
+            bev_ppm = model.model.conf.pixel_per_meter[0]
+        else:
+            bev_ppm = model.model.conf.pixel_per_meter[index]
 
         # map_T_cam_gt = Transform2D.to_pixels(
         #     tile_T_cam_gt, 1 / data["bev_ppm"]
@@ -61,7 +69,10 @@ def plot_example_single(
         m_t_c_gt = map_T_cam_gt.t.squeeze(0)  # ij_gt
         yaw_gt = map_T_cam_gt.angle.squeeze(0)  # m_r_c_gt
 
-        tile_t_gps = data["tile_t_gps"][k].squeeze(0)
+        if k == "chain":
+            tile_t_gps = data["tile_t_gps"][32.0].squeeze(0)
+        else:
+            tile_t_gps = data["tile_t_gps"][k].squeeze(0)
 
         if show_fused and "ij_fused" in pred[k]:
             m_t_c_pred = pred[k]["ij_fused"]
@@ -87,14 +98,20 @@ def plot_example_single(
             lp_ij = lp_ij.clip(min=np.percentile(lp_ij, 1))
         prob = lp_ij.exp()
 
-        feats_map = pred[k]["features_map"]
+        if k == "chain":
+            feats_map = pred[32.0]["features_map"]
+        else:
+            feats_map = pred[k]["features_map"]
         (feats_map_rgb,) = features_to_RGB(feats_map.numpy())
 
-        text1 = rf'$\Delta xy$: {results[f"xy_max_error_{str(int(k))}"]:.1f}m'
+        if k == "chain":
+            k_str = k
+        else:
+            k_str = str(int(k))
+        text1 = rf'$\Delta xy$: {results[f"xy_max_error_{k_str}"]:.1f}m'
         if has_rotation:
-            text1 += (
-                rf', $\Delta\theta$: {results[f"yaw_max_error_{str(int(k))}"]:.1f}°'
-            )
+            text1 += rf', $\Delta\theta$: {results[f"yaw_max_error_{k_str}"]:.1f}°'
+
         if show_fused and "xy_fused_error" in results:
             text1 += rf', $\Delta xy_{{fused}}$: {results["xy_fused_error"]:.1f}m'
             text1 += rf', $\Delta\theta_{{fused}}$: {results["yaw_fused_error"]:.1f}°'
@@ -107,7 +124,11 @@ def plot_example_single(
         maps_viz = []
         maps_titles = []
         if "semantic_map" in data:
-            rasters = data["semantic_map"][k]
+            if k == "chain":
+                rasters = data["semantic_map"][32.0]
+            else:
+                rasters = data["semantic_map"][k]
+
             map_viz = Colormap.apply(rasters)
             maps_titles.append("semantic map")
             maps_viz.append(map_viz)
@@ -163,10 +184,18 @@ def plot_example_single(
         #     plot_nodes(1, rasters[2], refactored=True)
 
         if overlay_bev:
-            (bev,) = features_to_RGB(
-                pred[k]["features_bev"].numpy(),
-                masks=[pred[k]["valid_bev"].numpy()],
-            )
+            # TODO: when chaining, the bev overlay should be the max depth bev.
+            # currently, the chain is in the smallest depth's resolution (finest).
+            if k == "chain":
+                (bev,) = features_to_RGB(
+                    pred[32.0]["features_bev"].numpy(),
+                    masks=[pred[32.0]["valid_bev"].numpy()],
+                )
+            else:
+                (bev,) = features_to_RGB(
+                    pred[k]["features_bev"].numpy(),
+                    masks=[pred[k]["valid_bev"].numpy()],
+                )
             bev = np.swapaxes(bev, 0, 1)
             plot_bev(bev, uv=m_t_c_pred, yaw=yaw_p, zorder=10, ax=axes[1])
 
@@ -220,10 +249,15 @@ def plot_example_single(
             name_ = name.replace("/", "_")
             p = str(
                 out_dir
-                / f"{idx}_{results[f'xy_max_error_{str(int(k))}']:.1f}_{scene}_{name_}_{{k}}.png"
+                / f"{idx}_{results[f'xy_max_error_{k_str}']:.1f}_{scene}_{name_}_{k}_{{}}.png"
             )
+
             save_plot(p.format("pred"))
             plt.close()
+
+        # Don't plot bev or scales for chain - they are not "chained"
+        if k == "chain":
+            continue
 
         if return_plots:
             import matplotlib
@@ -236,7 +270,6 @@ def plot_example_single(
             buf.seek(0)
             plot = Image.open(buf)
             plots.append(to_tensor(plot))
-
         else:
             plt.show()
 
@@ -336,7 +369,10 @@ def plot_example_single(
         if "semantic_map" in pred[k] and "log_prior" in pred[k]["semantic_map"]:
             prior = pred[k]["semantic_map"]["log_prior"][0].sigmoid()
         if "bev" in pred[k] and "confidence" in pred[k]["bev"]:
+            # In multiscale weighted training, the confidences are exp scaled so we log for viz
             conf_q = pred[k]["bev"]["confidence"]
+            if model.model.conf.add_temperature:
+                conf_q = torch.log(conf_q)  # add 1e-10?
         else:
             conf_q = torch.norm(feats_q, dim=0)
         conf_q = conf_q.masked_fill(~mask_bev, np.nan)

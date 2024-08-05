@@ -81,3 +81,4 @@ model:
   normalize_features: false
   rescale_coarser_prob: true
   add_temperature: false
+  apply_temperature: true # only checked if add_temperature is true

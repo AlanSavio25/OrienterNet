@@ -611,9 +611,13 @@ def evaluate_single_image(
                             range_r,
                         )
                     )
+                    if model.model.conf.add_temperature and model.model.conf.apply_temperature:
+                        temp = torch.exp(-model.model.temperature[idx])
+                    else:
+                        temp = 1.
                     # convert pose scores to probabilities
                     pose_log_probs = torch.nn.functional.log_softmax(
-                        pose_scores.flatten()
+                        temp * pose_scores.flatten()
                     )
                     poses.append(map_T_cam_samples)
                     pose_scores_list.append(pose_log_probs)
@@ -643,7 +647,7 @@ def evaluate_single_image(
         results = metrics(pred, batch)
         if callback is not None:
             callback(
-                i, model, unbatch_to_device(pred), unbatch_to_device(batch), results
+                i, model, unbatch_to_device(pred), unbatch_to_device(batch), results, return_plots=True
             )
         del batch_, batch, pred, results
 
@@ -773,8 +777,8 @@ def select_images_from_log(log_paths):
             if not log_data:
                 raise ValueError("Log data is empty")
             sorted_names = sorted(log_data["names"])
-            logs[i] = list(zip(log_data["errors"]["xy_max_error"], log_data["names"]))
-            logs[i] = [err for err, _ in sorted(logs[i], key=lambda x: x[1])]
+            logs[i] = list(zip(log_data["errors"]["xy_max_error_32"], log_data["errors"]["xy_max_error_128"], log_data["errors"]["xy_max_error_chain"], log_data["names"]))
+            logs[i] = [x[:-1] for x in sorted(logs[i], key=lambda x: x[-1])] # skip the last which is the name
 
         # selected_images = [n for (n, f, c) in list(zip(sorted_names, logs[0], logs[len(log_paths)-1])) if c < 5 and f > 12]
         # selected_images = [n for (n, f, c, C) in list(zip(sorted_names, logs[0], logs[1], logs[2])) if (f > 0.5 and c <= 0.5) or (f > 1 and c <= 1) or (f > 2 and c <= 2)]
@@ -789,15 +793,22 @@ def select_images_from_log(log_paths):
 
         selected_images = [
             n
-            for (n, single, multiscale) in list(zip(sorted_names, logs[0], logs[1]))
-            if (single < 5 and multiscale > 20)
-        ][:25] + [
-            n
-            for (n, single, multiscale) in list(zip(sorted_names, logs[0], logs[1]))
-            if (single > 20 and multiscale < 5)
-        ][
-            :25
-        ]
+            for (n, single, multiscale1) in list(zip(sorted_names, logs[0], logs[1]))
+            if (
+                single[0] > 15 and  # 32m
+                single[1] > 15 and  # 128m
+                single[2] > 15 and # chain
+                # multiscale1[0] > 15 and 
+                # multiscale1[1] > 15 and 
+                multiscale1[2] < 15
+                )
+        ][:25] #+ [
+        #     n
+        #     for (n, single, multiscale) in list(zip(sorted_names, logs[0], logs[1]))
+        #     if (single > 20 and multiscale < 5)
+        # ][
+        #     :25
+        # ]
 
     return selected_images[:50]
 

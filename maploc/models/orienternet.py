@@ -43,6 +43,7 @@ class OrienterNet(BaseModel):
         "pixel_per_meter": "???",
         "num_rotations": "???",
         "add_temperature": False,
+        "apply_temperature": True,  # allows turning off during eval
         "normalize_features": False,
         "padding_matching": "replicate",
         "apply_map_prior": True,
@@ -226,7 +227,9 @@ class OrienterNet(BaseModel):
 
             template_sampler = self.bev_mapper.template_sampler[i]
 
-            if self.conf.add_temperature:
+            if (
+                self.conf.add_temperature and self.conf.apply_temperature
+            ):  # TODO: add option to turn on/off during evaluation?
                 temperature = self.temperature[i]
             else:
                 temperature = None
@@ -243,7 +246,7 @@ class OrienterNet(BaseModel):
             ):
                 log_prior = pred[k]["semantic_map"]["log_prior"][0]
                 scores = scores + log_prior.unsqueeze(-1)
-            scores_unmasked = scores.clone()
+            # scores_unmasked = scores.clone()
             # pred["scores_unmasked"] = scores.clone()
             scores.masked_fill_(~map_mask[..., None], -np.inf)
             if "yaw_prior" in data:  # TODO: refactor
@@ -315,7 +318,7 @@ class OrienterNet(BaseModel):
                     "features_bev": f_bev,
                     "valid_bev": valid_bev.squeeze(1),
                     "scores": scores,
-                    "scores_unmasked": scores_unmasked,
+                    # "scores_unmasked": scores_unmasked,
                     "log_probs": log_probs,
                 }
             )
