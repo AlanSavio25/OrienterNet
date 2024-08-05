@@ -139,7 +139,7 @@ default_cfg = OmegaConf.create(
         "min_dist_between_keyframes": 4,
         "tiling": {
             "tile_size": 256,
-            "margin": 256,  # Increasing this from 128 to allow querying 512x512 maps at the bordering view locations
+            "margin": 512,  # Increasing this from 128 (for 32m model) to 512 (for 256m model) to allow querying 512x512 maps at the bordering view locations
             "ppm": 0.5,
         },
     }

@@ -55,7 +55,7 @@ class MapillaryDataModule(pl.LightningDataModule):
         # paths and fetch
         "data_dir": DATASETS_PATH / "MGL",
         "local_dir": None,
-        "tiles_filename": "tiles.pkl",
+        "tiles_filename": "tiles.pkl", # "tiles_2mpp_extended.pkl",
         "scenes": "???",
         "split": None,
         "loading": {
