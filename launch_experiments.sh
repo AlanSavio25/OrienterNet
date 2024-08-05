@@ -1061,7 +1061,7 @@
 # SNAP coarse 2mpp
 EXPERIMENT_NAME="12_0_snap_coarse_256m"
 python -m maploc.train experiment.name=$EXPERIMENT_NAME \
-        data.tiles_filename=tiles_2mpp.pkl \
+        data.tiles_filename=tiles_2mpp_extended.pkl \
         data.return_multiscale=True \
         data.crop_size_meters=[512] \
         data.max_init_error=[384] \
@@ -1080,7 +1080,7 @@ python -m maploc.train experiment.name=$EXPERIMENT_NAME \
         model.bev_mapper.z_max=[256.0] \
         training.lr=5e-5 \
         training.trainer.max_steps=320000 \
-        data.loading.train.batch_size=1
+        data.loading.train.batch_size=4 \
+        # training.trainer.val_check_interval=50
         
-
 exit 0
