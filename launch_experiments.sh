@@ -1,7 +1,7 @@
 #!/bin/bash
-#SBATCH --job-name=11_21_snap_multiscale
-#SBATCH --output=sbatch_outputs/11_21_snap_multiscale.out
-#SBATCH --time=50:00:00
+#SBATCH --job-name=11_22_snap_multiscale
+#SBATCH --output=sbatch_outputs/11_22_snap_multiscale.out
+#SBATCH --time=48:00:00
 #SBATCH --ntasks-per-node=18
 #SBATCH --mem-per-cpu=18G
 #SBATCH --account=ls_polle
@@ -1140,8 +1140,8 @@
 #         training.trainer.max_steps=320000 \
 #         data.loading.train.batch_size=4 \
 
-# # # 11_{16,19,21} => Multiscale model, Split Image and Map encoder, same as 11_14, except larger map, and no rescaling prob
-# EXPERIMENT_NAME="11_21_snap_multiscale"
+# # 11_{16,19,21} => Multiscale model, Split Image and Map encoder, same as 11_14, except larger map, and no rescaling prob
+# EXPERIMENT_NAME="11_19_snap_multiscale"
 # python -m maploc.train experiment.name=$EXPERIMENT_NAME \
 #         data.tiles_filename=tiles_1mpp.pkl \
 #         data.return_multiscale=True \
@@ -1168,7 +1168,7 @@
 #         data.loading.train.batch_size=4 \
 
 
-# # 11_17 => Multiscale model, Single Decoder, Split Map encoder. Larger map, no rescaling prob, no temperature, same as 11_15, except single decoder
+# # # 11_17 => Multiscale model, Single Decoder, Split Map encoder. Larger map, no rescaling prob, no temperature, same as 11_15, except single decoder
 # EXPERIMENT_NAME="11_17_snap_multiscale"
 # python -m maploc.train experiment.name=$EXPERIMENT_NAME \
 #         data.tiles_filename=tiles_1mpp.pkl \
@@ -1180,6 +1180,34 @@
 #         data.add_map_mask=True \
 #         model.multiscale=True \
 #         model.add_temperature=False \
+#         model.rescale_coarser_prob=False \
+#         model.map_encoder.backbone.output_scales=[0,0] \
+#         model.map_encoder.backbone.scale_factor=[2,0.5] \
+#         model.map_encoder.backbone.num_branches=2 \
+#         model.bev_mapper.image_encoder.backbone.encoder=resnet18 \
+#         model.bev_mapper.image_encoder.backbone.output_dim=256 \
+#         model.bev_mapper.image_encoder.backbone.num_branches=1 \
+#         model.pixel_per_meter=[2.0,0.5] \
+#         model.bev_mapper.grid_cell_size=[0.5,2] \
+#         model.bev_mapper.x_max=[32.0,128.0] \
+#         model.bev_mapper.z_max=[32.0,128.0] \
+#         training.lr=5e-5 \
+#         training.trainer.max_steps=320000 \
+#         data.loading.train.batch_size=4 \
+
+
+# 11_22 => Multiscale model, Single Decoder, Split Map encoder. Larger map, no rescaling prob, WITH temperature, same as 11_15, except single decoder
+# EXPERIMENT_NAME="11_22_snap_multiscale"
+# python -m maploc.train experiment.name=$EXPERIMENT_NAME \
+#         data.tiles_filename=tiles_1mpp.pkl \
+#         data.return_multiscale=True \
+#         data.crop_size_meters=[64,224] \
+#         data.max_init_error=[48,192] \
+#         data.pixel_per_meter=1 \
+#         data.mask_pad=[4,4] \
+#         data.add_map_mask=True \
+#         model.multiscale=True \
+#         model.add_temperature=True \
 #         model.rescale_coarser_prob=False \
 #         model.map_encoder.backbone.output_scales=[0,0] \
 #         model.map_encoder.backbone.scale_factor=[2,0.5] \
