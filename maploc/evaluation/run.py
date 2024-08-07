@@ -773,8 +773,17 @@ def select_images_from_log(log_paths):
             if not log_data:
                 raise ValueError("Log data is empty")
             sorted_names = sorted(log_data["names"])
-            logs[i] = list(zip(log_data["errors"]["xy_max_error"], log_data["names"]))
-            logs[i] = [err for err, _ in sorted(logs[i], key=lambda x: x[1])]
+            # this is previous default
+            # logs[i] = list(zip(log_data["errors"]["xy_max_error"], log_data["names"]))
+            # logs[i] = [err for err, _ in sorted(logs[i], key=lambda x: x[1])]
+
+            # this is for 256m vs 128m
+            logs[i] = list(
+                zip(log_data["errors"]["xy_max_error_chain"], log_data["names"])
+            )
+            logs[i] = [
+                x[:-1] for x in sorted(logs[i], key=lambda x: x[-1])
+            ]  # skip the last which is the name
 
         # selected_images = [n for (n, f, c) in list(zip(sorted_names, logs[0], logs[len(log_paths)-1])) if c < 5 and f > 12]
         # selected_images = [n for (n, f, c, C) in list(zip(sorted_names, logs[0], logs[1], logs[2])) if (f > 0.5 and c <= 0.5) or (f > 1 and c <= 1) or (f > 2 and c <= 2)]
@@ -787,17 +796,31 @@ def select_images_from_log(log_paths):
         #     n for value, n in sorted(list(zip(diff, sorted_names)), key=lambda x: x[0])
         # ]
 
+        # This is for where chain is better than everything else
+        # selected_images = [
+        #     n
+        #     for (n, single, multiscale) in list(zip(sorted_names, logs[0], logs[1]))
+        #     if (single < 5 and multiscale > 20)
+        # ][:25] + [
+        #     n
+        #     for (n, single, multiscale) in list(zip(sorted_names, logs[0], logs[1]))
+        #     if (single > 20 and multiscale < 5)
+        # ][
+        #     :25
+        # ]
+
         selected_images = [
             n
-            for (n, single, multiscale) in list(zip(sorted_names, logs[0], logs[1]))
-            if (single < 5 and multiscale > 20)
-        ][:25] + [
-            n
-            for (n, single, multiscale) in list(zip(sorted_names, logs[0], logs[1]))
-            if (single > 20 and multiscale < 5)
-        ][
-            :25
-        ]
+            for (n, coarse256, coarse128) in list(zip(sorted_names, logs[0], logs[1]))
+            if (coarse256[0] < 5 and coarse128[0] > 20)
+        ][:15]
+        # + [
+        #     n
+        #     for (n, single, multiscale) in list(zip(sorted_names, logs[0], logs[1]))
+        #     if (single > 20 and multiscale < 5)
+        # ][
+        #     :25
+        # ]
 
     return selected_images[:50]
 
