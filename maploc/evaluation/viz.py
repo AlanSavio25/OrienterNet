@@ -220,7 +220,7 @@ def plot_example_single(
             name_ = name.replace("/", "_")
             p = str(
                 out_dir
-                / f"{idx}_{results[f'xy_max_error_{str(int(k))}']:.1f}_{scene}_{name_}_{{k}}.png"
+                / f"{idx}_{results[f'xy_max_error_{str(int(k))}']:.1f}_{scene}_{name_}_{k}_{{}}.png"
             )
             save_plot(p.format("pred"))
             plt.close()
