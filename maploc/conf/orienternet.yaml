@@ -14,18 +14,13 @@ model:
     backbone:
       encoder: resnet101
   map_encoder:
+    num_encoders:
     embedding_dim: 16
     output_dim: ${..matching_dim}
     num_classes: ${data.num_classes}
     backbone:
-      encoder: vgg19
-      scale_factor:
-      pretrained: false
-      output_scales: [0]
-      num_downsample: 3
-      decoder: [128, 64, 64]
-      padding: replicate
-      num_branches:
+      - output_scales: [0]
+      - output_scales: [1]
     unary_prior: false
   # aerial_encoder:
   #   backbone:
@@ -40,6 +35,7 @@ model:
         encoder: resnet101
         output_dim: 128
         num_branches:
+        remove_stride_from_first_conv: false
     scale_classifier: mlp
     scale_mlp:
       activation: ReLU
@@ -79,6 +75,6 @@ model:
   ransac_matcher: false
   chop_bev: false
   normalize_features: false
-  rescale_coarser_prob: true
+  rescale_coarser_prob: false
   add_temperature: false
   apply_temperature: true # only checked if add_temperature is true

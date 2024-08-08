@@ -105,20 +105,20 @@ class AdaptationBlock(nn.Sequential):
 
 class FeatureExtractor(BaseModel):
     default_conf = {
-        "pretrained": True,
+        "pretrained": False,
         # "max_pool_ksize": 1,
         "num_branches": 1,
-        "scale_factor": 1,
+        # "scale_factor": None,
         "input_dim": 3,
         "output_scales": [0, 2, 4],  # what scales to adapt and output
         "output_dim": 128,  # # of channels in output feature maps
-        "encoder": "vgg16",  # string (torchvision net) or list of channels
-        "num_downsample": 4,  # how many downsample block (if VGG-style net)
-        "decoder": [64, 64, 64, 64],  # list of channels of decoder
+        "encoder": "vgg19",  # string (torchvision net) or list of channels
+        "num_downsample": 3,  # how many downsample block (if VGG-style net)
+        "decoder": [128, 64, 64],  # [64, 64, 64, 64],  # list of channels of decoder
         "decoder_norm": "nn.BatchNorm2d",  # normalization ind decoder blocks
         "do_average_pooling": False,
         "checkpointed": False,  # whether to use gradient checkpointing
-        "padding": "zeros",
+        "padding": "replicate",
     }
     mean = [0.485, 0.456, 0.406]
     std = [0.229, 0.224, 0.225]
@@ -226,10 +226,10 @@ class FeatureExtractor(BaseModel):
                 decoders.append(nn.ModuleList(decoder))
             self.decoders = nn.ModuleList(decoders)
 
-        scale_factors = conf.scale_factor
-        scale_blocks = []
-        if isinstance(scale_factors, (int, float)):
-            scale_factors = [scale_factors]
+        # scale_factors = conf.scale_factor
+        # scale_blocks = []
+        # if isinstance(scale_factors, (int, float)):
+        #     scale_factors = [scale_factors]
 
         # Adaptation layers
         adaptation = []
@@ -246,9 +246,9 @@ class FeatureExtractor(BaseModel):
 
             block = AdaptationBlock(input_, dim)
             adaptation.append(block)
-            scale_blocks.append(ScaleBlock(input_, input_, scale_factors[idx]))
+            # scale_blocks.append(ScaleBlock(input_, input_, scale_factors[idx]))
         self.adaptation = nn.ModuleList(adaptation)
-        self.scale_blocks = nn.ModuleList(scale_blocks)
+        # self.scale_blocks = nn.ModuleList(scale_blocks)
         self.scales = [2**s for s in conf.output_scales]
 
     def _forward(self, data):
@@ -284,9 +284,10 @@ class FeatureExtractor(BaseModel):
         out_scales = self.conf.output_scales
 
         out_scale = out_scales[module_idx]
-        scale_block = self.scale_blocks[module_idx]
+        # scale_block = self.scale_blocks[module_idx]
         adapt = self.adaptation[module_idx]
-        out_features = [adapt(scale_block(pre_features[out_scale]))]
+        # out_features = [adapt(scale_block(pre_features[out_scale]))]
+        out_features = [adapt(pre_features[out_scale])]
 
         pred = {"feature_maps": out_features, "skip_features": skip_features}
         return pred
