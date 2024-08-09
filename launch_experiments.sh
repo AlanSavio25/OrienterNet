@@ -1,6 +1,6 @@
 #!/bin/bash
-#SBATCH --job-name=12_4_snap_multiscale
-#SBATCH --output=sbatch_outputs/12_4_snap_multiscale.out
+#SBATCH --job-name=12_5_snap_multiscale
+#SBATCH --output=sbatch_outputs/12_5_snap_multiscale.out
 #SBATCH --time=48:00:00
 #SBATCH --ntasks-per-node=18
 #SBATCH --mem-per-cpu=18G
@@ -1308,8 +1308,8 @@
         
 
 # 12_3 => Multiscale (32m,128m) 2 separate map encoders, finer image features. Couldn't run this because it runs OOM
-# 12_4 => same, except larger crop size changed to 256 from 224
-EXPERIMENT_NAME="12_4_snap_multiscale"
+# 12_{4,5} => same, except larger crop size changed to 256 from 224
+EXPERIMENT_NAME="12_5_snap_multiscale"
 python -m maploc.train experiment.name=$EXPERIMENT_NAME \
         data.tiles_filename=[tiles.pkl,tiles_1mpp.pkl] \
         data.return_multiscale=True \
