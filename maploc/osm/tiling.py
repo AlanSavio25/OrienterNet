@@ -8,7 +8,7 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import rtree
 
-# import tiledwebmaps as twm
+import tiledwebmaps as twm
 from PIL import Image
 from tqdm import tqdm
 
@@ -125,6 +125,7 @@ class TileManager:
             tileloader = twm.bingmaps(key=bing_token)
             cached_tileloader = twm.DiskCached(
                 tileloader,
+                # TODO: move this cache to scratch, add PATH from settings
                 "/cluster/project/infk/cvg/students/alpaul/OrienterNet/datasets/cache/",
             )
         for ij, bbox_tile in tqdm(bbox_tiles.items()):
@@ -138,7 +139,7 @@ class TileManager:
                 canvas.aerial = cached_tileloader.load(
                     latlon=center,  # Center of the image
                     bearing=0.0,  # Bearing pointing upwards in the image
-                    meters_per_pixel=0.5,
+                    meters_per_pixel=1 / ppm,
                     shape=(width, height),
                     zoom=19,  # Zoom level of the fetched tiles
                 )
@@ -183,6 +184,7 @@ class TileManager:
             "groups": self.groups,
             "tiles_bbox": {},
             "tiles_raster": {},
+            "tiles_aerial": {},
         }
         if self.projection is not None:
             dump["ref_latlonalt"] = self.projection.latlonalt

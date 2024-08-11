@@ -132,15 +132,27 @@ location_to_params = {
 }
 
 
+# ppm=2, margin=256 (tiles.pkl)
+# ppm=1, margin=512 (tiles.pkl)
+# ppm=0.5, margin=1024 (tiles_2mpp.pkl) # extended
 default_cfg = OmegaConf.create(
     {
         "max_image_size": 512,
         "do_legacy_pano_offset": True,
         "min_dist_between_keyframes": 4,
         "tiling": {
-            "tile_size": 256,
-            "margin": 512,  # Increasing this from 128 (for 32m model) to 512 (for 256m model) to allow querying 512x512 maps at the bordering view locations
-            "ppm": 0.5,
+            # # Fine_32m: ppm=2
+            "tile_size": 128,
+            "margin": 256,  # Increasing this from 128 (for 32m model) to 512 (for 256m model) to allow querying 512x512 maps at the bordering view locations
+            "ppm": 2,
+            # # Coarse_64m: ppm=1
+            # "tile_size": 256,
+            # "margin": 512,  # Increasing this from 128 (for 32m model) to 512 (for 256m model) to allow querying 512x512 maps at the bordering view locations
+            # "ppm": 1,
+            # Coarse_128m: ppm=0.5
+            # "tile_size": 256,
+            # "margin": 1024,  # Increasing this from 128 (for 32m model) to 512 (for 256m model) to allow querying 512x512 maps at the bordering view locations
+            # "ppm": 0.5,
         },
     }
 )
@@ -382,7 +394,7 @@ def process_location(
     plotter.fig.write_html(geo_viz_path)
     logger.info("Wrote split visualization to %s.", geo_viz_path)
 
-    shutil.rmtree(raw_image_dir)
+    # shutil.rmtree(raw_image_dir)
     logger.info("Done processing for location %s.", location)
 
 
