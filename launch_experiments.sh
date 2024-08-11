@@ -1,7 +1,7 @@
 #!/bin/bash
-#SBATCH --job-name=12_0_snap_coarse_256m
-#SBATCH --output=sbatch_outputs/12_0_snap_coarse_256m.out
-#SBATCH --time=48:00:00
+#SBATCH --job-name=12_7_snap_multiscale
+#SBATCH --output=sbatch_outputs/12_7_snap_multiscale.out
+#SBATCH --time=50:00:00
 #SBATCH --ntasks-per-node=18
 #SBATCH --mem-per-cpu=18G
 #SBATCH --account=ls_polle
@@ -1222,30 +1222,175 @@
 #         training.lr=5e-5 \
 #         training.trainer.max_steps=320000 \
 #         data.loading.train.batch_size=4 \
-# 11_10, added map augmentations
-# SNAP coarse 2mpp
-EXPERIMENT_NAME="12_0_snap_coarse_256m"
+
+
+# # 12_0
+# # SNAP coarse 2mpp
+# EXPERIMENT_NAME="12_0_snap_coarse_256m"
+# python -m maploc.train experiment.name=$EXPERIMENT_NAME \
+#         data.tiles_filename=tiles_2mpp_extended.pkl \
+#         data.return_multiscale=True \
+#         data.crop_size_meters=[512] \
+#         data.max_init_error=[384] \
+#         data.pixel_per_meter=0.5 \
+#         data.mask_pad=[8] \
+#         data.add_map_mask=True \
+#         model.map_encoder.backbone.output_scales=[1] \
+#         model.map_encoder.unary_prior=False \
+#         model.multiscale=True \
+#         model.map_encoder.backbone.scale_factor=[1] \
+#         model.bev_mapper.image_encoder.backbone.encoder=resnet18 \
+#         model.bev_mapper.image_encoder.backbone.output_dim=128 \
+#         model.pixel_per_meter=[0.25] \
+#         model.bev_mapper.grid_cell_size=[4] \
+#         model.bev_mapper.x_max=[256.0] \
+#         model.bev_mapper.z_max=[256.0] \
+#         training.lr=5e-5 \
+#         training.trainer.max_steps=320000 \
+#         data.loading.train.batch_size=4 \
+#         # training.trainer.val_check_interval=50
+
+# # 12_1 => Multiscale (32m,128m) 2 separate map encoders.
+# EXPERIMENT_NAME="12_1_snap_multiscale"
+# python -m maploc.train experiment.name=$EXPERIMENT_NAME \
+#         data.tiles_filename=[tiles.pkl,tiles_1mpp.pkl] \
+#         data.return_multiscale=True \
+#         data.crop_size_meters=[64,256] \
+#         data.max_init_error=[48,192] \
+#         data.pixel_per_meter=[2,1] \
+#         data.mask_pad=[1,4] \
+#         data.add_map_mask=True \
+#         model.multiscale=True \
+#         model.add_temperature=True \
+#         model.map_encoder.num_encoders=2 \
+#         model.bev_mapper.image_encoder.backbone.encoder=resnet18 \
+#         model.bev_mapper.image_encoder.backbone.output_dim=256 \
+#         model.bev_mapper.image_encoder.backbone.num_branches=1 \
+#         model.pixel_per_meter=[2.0,0.5] \
+#         model.bev_mapper.grid_cell_size=[0.5,2] \
+#         model.bev_mapper.x_max=[32.0,128.0] \
+#         model.bev_mapper.z_max=[32.0,128.0] \
+#         training.lr=5e-5 \
+#         training.trainer.max_steps=320000 \
+#         data.loading.train.batch_size=4 \
+#         # model.map_encoder.backbone.output_scales=[0,0] \
+#         # model.map_encoder.backbone.scale_factor=[1,1] \
+#         # model.map_encoder.backbone.num_branches=1 \
+
+# 12_2 => Multiscale (32m,256m) 2 separate map encoders.
+# EXPERIMENT_NAME="12_2_snap_multiscale"
+# python -m maploc.train experiment.name=$EXPERIMENT_NAME \
+#         data.tiles_filename=[tiles.pkl,tiles_2mpp_extended.pkl] \
+#         data.return_multiscale=True \
+#         data.crop_size_meters=[64,512] \
+#         data.max_init_error=[48,384] \
+#         data.pixel_per_meter=[2,0.5] \
+#         data.mask_pad=[1,8] \
+#         data.add_map_mask=True \
+#         model.multiscale=True \
+#         model.add_temperature=True \
+#         model.map_encoder.num_encoders=2 \
+#         model.bev_mapper.image_encoder.backbone.encoder=resnet18 \
+#         model.bev_mapper.image_encoder.backbone.output_dim=256 \
+#         model.bev_mapper.image_encoder.backbone.num_branches=1 \
+#         model.pixel_per_meter=[2.0,0.25] \
+#         model.bev_mapper.grid_cell_size=[0.5,4] \
+#         model.bev_mapper.x_max=[32.0,256.0] \
+#         model.bev_mapper.z_max=[32.0,256.0] \
+#         training.lr=5e-5 \
+#         training.trainer.max_steps=320000 \
+#         data.loading.train.batch_size=4 \
+#         # model.map_encoder.backbone.output_scales=[0,0] \
+#         # model.map_encoder.backbone.scale_factor=[1,1] \
+#         # model.map_encoder.backbone.num_branches=1 \
+        
+
+# # 12_3 => Multiscale (32m,128m) 2 separate map encoders, finer image features. Couldn't run this because it runs OOM
+# # 12_{4,5} => same, except larger crop size changed to 256 from 224
+# EXPERIMENT_NAME="12_5_snap_multiscale"
+# python -m maploc.train experiment.name=$EXPERIMENT_NAME \
+#         data.tiles_filename=[tiles.pkl,tiles_1mpp.pkl] \
+#         data.return_multiscale=True \
+#         data.crop_size_meters=[64,256] \
+#         data.max_init_error=[48,192] \
+#         data.pixel_per_meter=[2,1] \
+#         data.mask_pad=[1,4] \
+#         data.add_map_mask=True \
+#         model.multiscale=True \
+#         model.add_temperature=True \
+#         model.map_encoder.num_encoders=2 \
+#         model.bev_mapper.image_encoder.backbone.remove_stride_from_first_conv=True \
+#         model.bev_mapper.image_encoder.backbone.encoder=resnet18 \
+#         model.bev_mapper.image_encoder.backbone.output_dim=256 \
+#         model.bev_mapper.image_encoder.backbone.num_branches=1 \
+#         model.pixel_per_meter=[2.0,0.5] \
+#         model.bev_mapper.grid_cell_size=[0.5,2] \
+#         model.bev_mapper.x_max=[32.0,128.0] \
+#         model.bev_mapper.z_max=[32.0,128.0] \
+#         training.lr=5e-5 \
+#         training.trainer.max_steps=320000 \
+#         data.loading.train.batch_size=4 \
+#         # model.bev_mapper.image_encoder.backbone.remove_stride_from_first_conv=True \
+#         # model.map_encoder.backbone.output_scales=[0,0] \
+#         # model.map_encoder.backbone.scale_factor=[1,1] \
+#         # model.map_encoder.backbone.num_branches=1 \
+
+# # 12_1_verification_new_code (branch: multiscale_aerial): Multiscale Weighted (32,128).
+# EXPERIMENT_NAME="12_1_verification_snap_multiscale"
+# python -m maploc.train experiment.name=$EXPERIMENT_NAME \
+#         data.scenes=['amsterdam'] \
+#         data.tiles_filename=[tiles.pkl,tiles_1mpp.pkl] \
+#         data.map_types=['semantic'] \
+#         data.crop_size_meters=[64,256] \
+#         data.max_init_error=[48,192] \
+#         data.pixel_per_meter=[2,1] \
+#         data.mask_pad=[1,4] \
+#         data.add_map_mask=True \
+#         model.add_temperature=True \
+#         model.map_encoder.backbone.output_scales=[0,1] \
+#         model.map_encoder.num_encoders=2 \
+#         model.bev_mapper.image_encoder.backbone.encoder=resnet18 \
+#         model.bev_mapper.image_encoder.backbone.output_dim=256 \
+#         model.bev_mapper.image_encoder.backbone.num_branches=1 \
+#         model.pixel_per_meter=[2.0,0.5] \
+#         model.bev_mapper.grid_cell_size=[0.5,2] \
+#         model.bev_mapper.x_max=[32.0,128.0] \
+#         model.bev_mapper.z_max=[32.0,128.0] \
+#         training.lr=5e-5 \
+#         training.trainer.max_steps=320000 \
+#         data.loading.train.batch_size=4 \
+#         # data.return_multiscale=True \
+#         # model.map_encoder.backbone.output_scales=[0,0] \
+#         # model.map_encoder.backbone.scale_factor=[1,1] \
+#         # model.map_encoder.backbone.num_branches=1 \
+
+# 12_{7,8}: Multiscale Weighted (32,128). Same as 12_1 but with aerial.
+EXPERIMENT_NAME="12_7_snap_multiscale"
 python -m maploc.train experiment.name=$EXPERIMENT_NAME \
-        data.tiles_filename=tiles_2mpp_extended.pkl \
-        data.return_multiscale=True \
-        data.crop_size_meters=[512] \
-        data.max_init_error=[384] \
-        data.pixel_per_meter=0.5 \
-        data.mask_pad=[8] \
+        data.tiles_filename=[tiles_aerial.pkl,tiles_1mpp_aerial.pkl] \
+        data.map_types=['semantic','aerial'] \
+        data.crop_size_meters=[64,256] \
+        data.max_init_error=[48,192] \
+        data.pixel_per_meter=[2,1] \
+        data.mask_pad=[1,4] \
         data.add_map_mask=True \
-        model.map_encoder.backbone.output_scales=[1] \
-        model.map_encoder.unary_prior=False \
-        model.multiscale=True \
-        model.map_encoder.backbone.scale_factor=[1] \
+        model.add_temperature=True \
+        model.map_encoder.backbone.output_scales=[0,1] \
+        model.map_encoder.num_encoders=2 \
         model.bev_mapper.image_encoder.backbone.encoder=resnet18 \
-        model.bev_mapper.image_encoder.backbone.output_dim=128 \
-        model.pixel_per_meter=[0.25] \
-        model.bev_mapper.grid_cell_size=[4] \
-        model.bev_mapper.x_max=[256.0] \
-        model.bev_mapper.z_max=[256.0] \
+        model.bev_mapper.image_encoder.backbone.output_dim=256 \
+        model.bev_mapper.image_encoder.backbone.num_branches=1 \
+        model.pixel_per_meter=[2.0,0.5] \
+        model.bev_mapper.grid_cell_size=[0.5,2] \
+        model.bev_mapper.x_max=[32.0,128.0] \
+        model.bev_mapper.z_max=[32.0,128.0] \
         training.lr=5e-5 \
         training.trainer.max_steps=320000 \
         data.loading.train.batch_size=4 \
-        # training.trainer.val_check_interval=50
-        
+        # data.scenes=['amsterdam'] \
+        # data.return_multiscale=True \
+        # model.map_encoder.backbone.output_scales=[0,0] \
+        # model.map_encoder.backbone.scale_factor=[1,1] \
+        # model.map_encoder.backbone.num_branches=1 \
+
 exit 0
