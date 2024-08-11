@@ -203,44 +203,4 @@ class GenericModule(pl.LightningModule):
         return pl.core.saving._load_state(cls, checkpoint, strict=strict, cfg=cfg)
 
     def transfer_batch_to_device(self, batch, device, dataloader_idx) -> Any:
-
-        if isinstance(batch["pixels_per_meter"], dict):
-            if self.cfg.model.multiscale:
-                return super().transfer_batch_to_device(batch, device, dataloader_idx)
-            if self.training:
-                scale_idx = int(
-                    np.random.choice(np.arange(len(self.cfg.model.bev_mapper.z_max)))
-                )
-            else:
-                if batch.get("scale_idx", None) is not None:
-                    scale_idx = batch.get("scale_idx")[0].item()
-                else:
-                    scale_idx = (
-                        1 if len(self.cfg.model.bev_mapper.z_max) > 1 else 0
-                    )  # Fixed for validation
-            if isinstance(self.cfg.model.bev_mapper.z_max, (int, float)):
-                # this is for backward compatibility. terrible code, needs to be fixed.
-                z_max = self.cfg.model.bev_mapper.z_max
-            else:
-                z_max = self.cfg.model.bev_mapper.z_max[scale_idx]
-            batch["scale_idx"] = torch.tensor(scale_idx).unsqueeze(0)
-            keys = [
-                "map_mask",
-                "map_t_gps",
-                "tile_t_gps",
-                "accuracy_gps",
-                "semantic_map",
-                "tile_T_cam",
-                "map_T_cam",
-                "map_t_init",
-                "pixels_per_meter",
-                "canvas",
-                "z_max",
-                "bev_ppm",
-            ]
-            for k in keys:
-                if k not in batch:
-                    continue
-                batch[k] = batch[k][z_max]
-
         return super().transfer_batch_to_device(batch, device, dataloader_idx)

@@ -133,7 +133,7 @@ def plot_example_single(
             maps_titles.append("semantic map")
             maps_viz.append(map_viz)
         if "aerial_map" in data:
-            aerial_map = data["aerial_map"].permute(1, 2, 0) / 255.0
+            aerial_map = data["aerial_map"][k].permute(1, 2, 0)  #  / 255.0
             maps_titles.append("aerial map")
             maps_viz.append(aerial_map.numpy())
 
@@ -176,13 +176,16 @@ def plot_example_single(
         )
         fig = plt.gcf()
         axes = fig.axes
-        axes[1].images[0].set_interpolation("none")
-        axes[2].images[0].set_interpolation("none")
+        for map_idx in range(len(maps_viz)):
+            axes[map_idx].images[0].set_interpolation("none")
+
         Colormap.add_colorbar()
 
-        # if "semantic_map" in pred:
-        #     plot_nodes(1, rasters[2], refactored=True)
+        if "semantic_map" in pred[k] and k == 32.0:
+            # On large maps, node labels overlap and can be unreadable
+            plot_nodes(1, rasters[2], refactored=True)
 
+        maps_to_draw_on = [x + 1 for x in list(range(len(maps_viz)))]
         if overlay_bev:
             # TODO: when chaining, the bev overlay should be the max depth bev.
             # currently, the chain is in the smallest depth's resolution (finest).
@@ -197,7 +200,8 @@ def plot_example_single(
                     masks=[pred[k]["valid_bev"].numpy()],
                 )
             bev = np.swapaxes(bev, 0, 1)
-            plot_bev(bev, uv=m_t_c_pred, yaw=yaw_p, zorder=10, ax=axes[1])
+            for map_idx in maps_to_draw_on:
+                plot_bev(bev, uv=m_t_c_pred, yaw=yaw_p, zorder=10, ax=axes[map_idx])
 
         if show_gps and tile_t_gps is not None:
             m_t_gps = Transform2D.to_pixels(
@@ -205,29 +209,27 @@ def plot_example_single(
                 1 / bev_ppm,
             )
             plot_pose(
-                [1] + ([2] if len(maps_viz) > 1 else []),
+                maps_to_draw_on,
                 m_t_gps,
                 c="blue",
                 refactored=True,
             )
         plot_pose(
-            [1] + ([2] if len(maps_viz) > 1 else []),
+            maps_to_draw_on,
             m_t_c_gt,
             yaw_gt,
             c="red",
             refactored=True,
         )
         plot_pose(
-            [1] + ([2] if len(maps_viz) > 1 else []),
+            maps_to_draw_on,
             m_t_c_pred,
             yaw_p,
             c="k",
             refactored=True,
         )
 
-        plot_dense_rotations(
-            2 if len(maps_viz) == 1 else 3, lp_ijt.exp(), refactored=True
-        )
+        plot_dense_rotations(len(maps_viz) + 1, lp_ijt.exp(), refactored=True)
         # inset_center = m_t_c_pred if results["xy_max_error"] < 5 else m_t_c_gt
 
         # Doesn't work for refactored axes conventions

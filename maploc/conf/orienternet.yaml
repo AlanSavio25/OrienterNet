@@ -5,7 +5,6 @@ defaults:
   - _self_
 model:
   name: orienternet
-  multiscale: true
   latent_dim: 128
   matching_dim: 8
   pixel_per_meter: ${data.pixel_per_meter}
@@ -13,28 +12,27 @@ model:
   image_encoder:
     backbone:
       encoder: resnet101
-  map_encoder:
+  map_encoder: # contains conf for semantic and aerial
+    num_encoders: 1 # number of BEV scales
+    map_types: ${data.map_types}
     embedding_dim: 16
-    output_dim: ${..matching_dim}
     num_classes: ${data.num_classes}
+    output_dim: ${..matching_dim}
     backbone:
       encoder: vgg19
-      scale_factor:
       pretrained: false
       output_scales: [0]
       num_downsample: 3
       decoder: [128, 64, 64]
       padding: replicate
-      num_branches:
     unary_prior: false
   # aerial_encoder:
   #   backbone:
-  #     encoder: resnet50
+  #     encoder: resnet18
   #     remove_stride_from_first_conv: true
   #     output_dim: ${...matching_dim}
-  #   # unary_prior: true
+    # unary_prior: true
   bev_mapper:
-    multiscale: ${..multiscale}
     image_encoder:
       backbone:
         encoder: resnet101
@@ -46,7 +44,6 @@ model:
       layers:
         - ${...num_scale_bins}
       apply_input_activation: true
-      # input_dim: ${..image_encoder.backbone.output_dim}
       input_dim: ${...latent_dim}
     fusion_mlp: # fuses feature with depth score
       activation: ReLU
@@ -73,6 +70,7 @@ model:
       latent_dim: ${...latent_dim}
       output_dim: ${...matching_dim}
       confidence: true
+      checkpointed: false
       # mlp:
         # layers:
         # input_dim:

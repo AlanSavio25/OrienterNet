@@ -26,10 +26,9 @@ class MapLocDataset(torchdata.Dataset):
         "random": True,
         "num_threads": None,
         # map
-        "return_multiscale": False,
+        "map_types": ["semantic"],  # "aerial"
         "z_max": 32.0,
         "bev_ppm": 2,
-        "scale_idx": None,
         "num_classes": None,
         "pixel_per_meter": "???",
         "crop_size_meters": "???",
@@ -120,24 +119,15 @@ class MapLocDataset(torchdata.Dataset):
         else:
             error = np.random.RandomState(seed).uniform(-1, 1, size=2)
 
-        if self.cfg.return_multiscale:
-            # xy_w_init += error * min(self.cfg.max_init_error)
-            xy_w_init = [
-                xy_w_init + error * max_init_error
-                for max_init_error in self.cfg.max_init_error
-            ]
-            bbox_tile = [
-                BoundaryBox(init - crop_size_meters, init + crop_size_meters)
-                for (crop_size_meters, init) in zip(
-                    self.cfg.crop_size_meters, xy_w_init
-                )
-            ]
-        else:
-            xy_w_init += error * self.cfg.max_init_error
-            bbox_tile = BoundaryBox(
-                xy_w_init - self.cfg.crop_size_meters,
-                xy_w_init + self.cfg.crop_size_meters,
-            )
+        # xy_w_init += error * min(self.cfg.max_init_error)
+        xy_w_init = [
+            xy_w_init + error * max_init_error
+            for max_init_error in self.cfg.max_init_error
+        ]
+        bbox_tile = [
+            BoundaryBox(init - crop_size_meters, init + crop_size_meters)
+            for (crop_size_meters, init) in zip(self.cfg.crop_size_meters, xy_w_init)
+        ]
         return self.get_view(idx, scene, seq, name, seed, bbox_tile)
 
     def get_view(self, idx, scene, seq, name, seed, bbox_tile):
@@ -172,72 +162,73 @@ class MapLocDataset(torchdata.Dataset):
             data["camera_height"] = self.data["height"][idx].clone()
 
         # raster extraction
-        if self.cfg.return_multiscale:
-            z_max = self.cfg.z_max
-            canvas = [
-                tile_manager.query(bbox_tile_)
-                for (tile_manager, bbox_tile_) in zip(
-                    self.tile_managers[scene], bbox_tile
-                )
-            ]
-            ppm = {z: torch.tensor(c.ppm).float() for z, c in zip(z_max, canvas)}
-            # raster = [c.raster for c in canvas]
-            # raster = {torch.from_numpy(np.ascontiguousarray(r)).long() for r in raster]
+        z_max = self.cfg.z_max
+        canvas = [
+            tile_manager.query(bbox_tile_)
+            for (tile_manager, bbox_tile_) in zip(self.tile_managers[scene], bbox_tile)
+        ]
+        ppm = {z: torch.tensor(c.ppm).float() for z, c in zip(z_max, canvas)}
+
+        return_semantic = "semantic" in self.cfg.map_types
+        return_aerial = "aerial" in self.cfg.map_types
+
+        if return_semantic:
             raster = {
                 z: torch.from_numpy(np.ascontiguousarray(c.raster)).long()
                 for z, c in zip(z_max, canvas)
             }
-            # TODO: dict aerials
-            if hasattr(canvas[0], "aerial"):
-                aerial = [c.aerial for c in canvas]
-                aerial = torch.stack(
-                    [
-                        torch.from_numpy(np.ascontiguousarray(aerial_)).long()
-                        for aerial_ in aerial
-                    ]
-                )
         else:
-            canvas = self.tile_managers[scene].query(bbox_tile)
-            ppm = torch.tensor(canvas.ppm).float()
-            raster = canvas.raster  # C, H, W
-            raster = torch.from_numpy(np.ascontiguousarray(raster)).long()
-            if hasattr(canvas, "aerial"):
-                aerial = canvas.aerial
-                aerial = torch.from_numpy(np.ascontiguousarray(aerial)).long()
+            raster = None
+
+        if return_aerial:
+            assert hasattr(canvas[0], "aerial")  # TODO: remove this
+            aerial = {
+                z: torch.from_numpy(np.ascontiguousarray(c.aerial)) / 255
+                for z, c in zip(z_max, canvas)
+            }
+        else:
+            aerial = None
+
+        assert (
+            return_semantic or return_aerial
+        ), "Map Types must be either 'semantic' or 'aerial'"
 
         world_T_cam = Transform3D.from_Rt(world_R_cam, world_t_cam)
         world_T_cam2d = Transform2D.camera_2d_from_3d(world_T_cam)
 
         _, cam_R_gcam = decompose_cam_into_gcam(world_T_cam)
 
-        if self.cfg.return_multiscale:
-            world_T_tile = {
-                z: Transform2D.from_Rt(torch.eye(2), c.bbox.min_)
-                for z, c in zip(z_max, canvas)
-            }
-            tile_T_cam = {
-                z: (w_T_t.inv() @ world_T_cam2d).float()
-                for z, w_T_t in world_T_tile.items()
-            }
-        else:
-            world_T_tile = Transform2D.from_Rt(torch.eye(2), canvas.bbox.min_)
-            tile_T_cam = (world_T_tile.inv() @ world_T_cam2d).float()
+        world_T_tile = {
+            z: Transform2D.from_Rt(torch.eye(2), c.bbox.min_)
+            for z, c in zip(z_max, canvas)
+        }
+        tile_T_cam = {
+            z: (w_T_t.inv() @ world_T_cam2d).float()
+            for z, w_T_t in world_T_tile.items()
+        }
 
         # Map augmentations
         if self.stage == "train":
             if self.cfg.augmentation.rot90:
-                raster, tile_T_cam = random_rot90(raster, tile_T_cam, ppm)
-            if self.cfg.augmentation.flip:
-                image, raster, tile_T_cam, cam_R_gcam = random_flip(
-                    image, raster, tile_T_cam, cam_R_gcam, ppm
+                (raster, aerial), tile_T_cam = random_rot90(
+                    [raster, aerial], tile_T_cam, ppm
                 )
-        if self.cfg.return_multiscale:
-            map_T_cam = {
-                z: Transform2D.to_pixels(t_T_c, 1 / c.ppm)
-                for (z, t_T_c, c) in zip(z_max, tile_T_cam.values(), canvas)
-            }
-        else:
-            map_T_cam = Transform2D.to_pixels(tile_T_cam, 1 / canvas.ppm)
+            if self.cfg.augmentation.flip:
+                image, (raster, aerial), tile_T_cam, cam_R_gcam = random_flip(
+                    image, (raster, aerial), tile_T_cam, cam_R_gcam, ppm
+                )
+
+            # Apply image augmentations on aerial map
+            if return_aerial:
+                with torch.random.fork_rng(devices=[]):
+                    torch.manual_seed(seed * 2)
+                    for z in aerial.keys():
+                        aerial[z] = self.tfs(aerial[z])
+
+        map_T_cam = {
+            z: Transform2D.to_pixels(t_T_c, 1 / c.ppm)
+            for (z, t_T_c, c) in zip(z_max, tile_T_cam.values(), canvas)
+        }
         # map_T_cam will be deprecated, tile_T_cam is sufficient.
 
         # We can avoid rectification when using SNAP's inverse BEV prediction
@@ -248,63 +239,43 @@ class MapLocDataset(torchdata.Dataset):
             cam_R_gcam = torch.eye(3)
 
         # Spatial to memory layout
-        if self.cfg.return_multiscale:
-            # raster = {k:torch.rot90(r, -1, dims=(-2, -1)) for k,r in raster.items()}
+        if return_semantic:
             for k, r in raster.items():
                 raster[k] = torch.rot90(r, -1, dims=(-2, -1))
-            if hasattr(canvas, "aerial"):
-                aerial = torch.stack(
-                    [torch.rot90(a, -1, dims=(-2, -1)) for a in aerial]
-                )
-                data["aerial_map"] = aerial
+        if return_aerial:
+            for k, aer in aerial.items():
+                aerial[k] = torch.rot90(aer, -1, dims=(-2, -1))
 
-            world_t_init = {
-                z: torch.from_numpy(bbox_tile_.center)
-                for (z, bbox_tile_) in zip(z_max, bbox_tile)
-            }
-            tile_t_init = {
-                z: (w_t_init - w_T_t.t).float()
-                for (z, w_t_init, w_T_t) in zip(
-                    z_max, world_t_init.values(), world_T_tile.values()
-                )
-            }
-            map_t_init = {
-                z: Transform2D.to_pixels(t_t_init, 1 / c.ppm)
-                for (z, t_t_init, c) in zip(z_max, tile_t_init.values(), canvas)
-            }
-        else:
-            raster = torch.rot90(raster, -1, dims=(-2, -1))
-            if hasattr(canvas, "aerial"):
-                aerial = torch.rot90(aerial, -1, dims=(-2, -1))
-                data["aerial_map"] = aerial
-
-            world_t_init = torch.from_numpy(bbox_tile.center)
-            tile_t_init = (world_t_init - world_T_tile.t).float()
-            map_t_init = Transform2D.to_pixels(tile_t_init, 1 / canvas.ppm)
+        world_t_init = {
+            z: torch.from_numpy(bbox_tile_.center)
+            for (z, bbox_tile_) in zip(z_max, bbox_tile)
+        }
+        tile_t_init = {
+            z: (w_t_init - w_T_t.t).float()
+            for (z, w_t_init, w_T_t) in zip(
+                z_max, world_t_init.values(), world_T_tile.values()
+            )
+        }
+        map_t_init = {
+            z: Transform2D.to_pixels(t_t_init, 1 / c.ppm)
+            for (z, t_t_init, c) in zip(z_max, tile_t_init.values(), canvas)
+        }
 
         # Create the mask for prior location
         if self.cfg.add_map_mask:
-            if self.cfg.return_multiscale:
-                map_mask = {
-                    z: torch.from_numpy(self.create_map_mask(c, init_error, pad))
-                    for (z, c, init_error, pad) in zip(
-                        z_max, canvas, self.cfg.max_init_error, self.cfg.mask_pad
-                    )
-                }
-                data["map_mask"] = {
-                    z: torch.rot90(mask, -1, dims=(-2, -1))
-                    for (z, mask) in zip(z_max, map_mask.values())
-                }
-            else:
-                map_mask = torch.from_numpy(
-                    self.create_map_mask(
-                        canvas, self.cfg.max_init_error, self.cfg.mask_pad
-                    )
+            map_mask = {
+                z: torch.from_numpy(self.create_map_mask(c, init_error, pad))
+                for (z, c, init_error, pad) in zip(
+                    z_max, canvas, self.cfg.max_init_error, self.cfg.mask_pad
                 )
-                data["map_mask"] = torch.rot90(map_mask, -1, dims=(-2, -1))
+            }
+            data["map_mask"] = {
+                z: torch.rot90(mask, -1, dims=(-2, -1))
+                for (z, mask) in zip(z_max, map_mask.values())
+            }
 
         if self.cfg.max_init_error_rotation is not None:
-            # does not support multiscale yet
+            # does not support multiscale (dicts) yet
             if "shifts" in self.data:
                 error = self.data["shifts"][idx][-1]
             else:
@@ -316,46 +287,44 @@ class MapLocDataset(torchdata.Dataset):
 
         if self.cfg.return_gps:
             gps = self.data["gps_position"][idx][:2].numpy()
-            if self.cfg.return_multiscale:
-                world_t_gps = self.tile_managers[scene][0].projection.project(gps)
-                world_t_gps = torch.from_numpy(world_t_gps)
-                tile_t_gps = [
-                    (world_t_gps - w_T_t.t).float() for w_T_t in world_T_tile.values()
-                ]
-                data["tile_t_gps"] = {
-                    z: t_t_gps for (z, t_t_gps) in zip(z_max, tile_t_gps)
-                }
-                data["map_t_gps"] = {
-                    z: Transform2D.to_pixels(t_t_gps, 1 / c.ppm)
-                    for (z, t_t_gps, c) in zip(z_max, tile_t_gps, canvas)
-                }
-                data["accuracy_gps"] = {
-                    z: torch.tensor(min(self.cfg.accuracy_gps, crop_size_meters))
-                    for (z, crop_size_meters) in zip(z_max, self.cfg.crop_size_meters)
-                }
-
-            else:
-                world_t_gps = self.tile_managers[scene].projection.project(gps)
-                world_t_gps = torch.from_numpy(world_t_gps)
-                tile_t_gps = (world_t_gps - world_T_tile.t).float()
-                data["tile_t_gps"] = tile_t_gps
-                data["map_t_gps"] = Transform2D.to_pixels(tile_t_gps, 1 / canvas.ppm)
-                data["accuracy_gps"] = torch.tensor(
-                    min(self.cfg.accuracy_gps, self.cfg.crop_size_meters)
-                )
+            world_t_gps = self.tile_managers[scene][0].projection.project(gps)
+            world_t_gps = torch.from_numpy(world_t_gps)
+            tile_t_gps = [
+                (world_t_gps - w_T_t.t).float() for w_T_t in world_T_tile.values()
+            ]
+            data["tile_t_gps"] = {z: t_t_gps for (z, t_t_gps) in zip(z_max, tile_t_gps)}
+            data["map_t_gps"] = {
+                z: Transform2D.to_pixels(t_t_gps, 1 / c.ppm)
+                for (z, t_t_gps, c) in zip(z_max, tile_t_gps, canvas)
+            }
+            data["accuracy_gps"] = {
+                z: torch.tensor(min(self.cfg.accuracy_gps, crop_size_meters))
+                for (z, crop_size_meters) in zip(z_max, self.cfg.crop_size_meters)
+            }
 
         if "chunk_index" in self.data:
             data["chunk_id"] = (scene, seq, self.data["chunk_index"][idx])
 
-        if self.cfg.return_multiscale:
-            canvas = {z: c for z, c in zip(z_max, canvas)}
-            data["z_max"] = {z: torch.tensor([z]).float() for z in z_max}
-            data["bev_ppm"] = {
-                z: torch.tensor([bev_ppm]).float()
-                for (z, bev_ppm) in zip(z_max, self.cfg.bev_ppm)
-            }
-            if self.cfg.scale_idx is not None:
-                data["scale_idx"] = self.cfg.scale_idx
+        # Convert lists to dicts for easier access.
+        canvas = {z: c for z, c in zip(z_max, canvas)}
+        data["z_max"] = {z: torch.tensor([z]).float() for z in z_max}
+        data["bev_ppm"] = {
+            z: torch.tensor([bev_ppm]).float()
+            for (z, bev_ppm) in zip(z_max, self.cfg.bev_ppm)
+        }
+
+        if return_semantic:
+            data.update(
+                {
+                    "semantic_map": raster,
+                }
+            )
+        if return_aerial:
+            data.update(
+                {
+                    "aerial_map": aerial,
+                }
+            )
 
         return {
             **data,
@@ -367,7 +336,6 @@ class MapLocDataset(torchdata.Dataset):
             "world_T_cam": world_T_cam.t,
             "cam_R_gcam": cam_R_gcam,
             # Map(s)
-            "semantic_map": raster,
             "canvas": canvas,
             "tile_T_cam": tile_T_cam,
             "map_T_cam": map_T_cam,

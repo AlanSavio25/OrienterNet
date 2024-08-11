@@ -31,10 +31,8 @@ from .voting import (
 class OrienterNet(BaseModel):
     default_conf = {
         "image_encoder": "???",
-        "multiscale": False,
         # "semantic_encoder": "???",
         "map_encoder": None,
-        "aerial_encoder": None,
         "bev_mapper": None,
         # "bev_net": "???",
         "grid_refinement": False,
@@ -74,15 +72,8 @@ class OrienterNet(BaseModel):
         assert self.conf.normalize_scores_by_num_valid
         assert self.conf.prior_renorm
 
-        Encoder = get_model(conf.image_encoder.get("name", "feature_extractor_v2"))
-        self.map_encoder = self.aerial_encoder = None
-        if conf.map_encoder is not None:
-            self.map_encoder = MapEncoder(conf.map_encoder)  # OSM maps
-        if conf.aerial_encoder is not None:
-            self.aerial_encoder = Encoder(conf.aerial_encoder.backbone)
-        if conf.map_encoder is None and conf.aerial_encoder is None:
-            raise ValueError("At least one map encoder must be created")
-
+        assert MapEncoder is not None
+        self.map_encoder = MapEncoder(conf.map_encoder)
         self.bev_mapper = BEVMapper(conf.bev_mapper)
 
         if conf.add_temperature:
@@ -127,81 +118,36 @@ class OrienterNet(BaseModel):
         scores = scores / num_valid[..., None, None]
         return scores
 
-    def fuse_neural_maps(self, feature_maps):
-        """Fuse aerial and semantic features maps with dropout"""
-        # max pool feature maps
-        # Apply Dropout. # todo: test this
-        # ==
-        # dropout_mask = torch.bernoulli(
-        #     torch.full(len(planes), len(planes[0]), 0.5, device=planes[0].device)
-        # )
-        # dropout_mask = torch.where(
-        #     dropout_mask.any(dim=0, keepdim=True),
-        #     dropout_mask,
-        #     torch.ones_like(dropout_mask)
-        # )
-        # features = [
-        #     p.replace(
-        #         valid=torch.where(m.unsqueeze(-1).unsqueeze(-1)), p.valid, torch.zeros_like(p.valid)
-        #     )
-        #     for p, m in zip(feature_maps, dropout_mask)
-        # ]
-        # features = torch.stack(features, dim=-2)
-        # ==
-        feature_maps = torch.stack(feature_maps, dim=0)
-        f_map, _ = torch.max(feature_maps, dim=0)
-        return f_map
-
     def _forward(self, data):
 
         # TODO: for later, make data = {32.0: {keys}}, where the shared values can be referenced to avoid increas memory usage
         # This will make data and pred consistent
 
-        # NOTE: for random scale selection, selected choices should be
-        # forwarded through args and not through data.
-
         # Predict BEV from image
         pred = self.bev_mapper(data)
 
-        # Encode aerial/semantic maps
-        # note: these maps are in memory layout
-        feature_maps = {k: [] for k in self.conf.bev_mapper.z_max}
-        if self.map_encoder is not None:
-            assert "semantic_map" in data
-            semantic_map = self.map_encoder({"map": data["semantic_map"]})
-            for i, k in enumerate(semantic_map):
-                pred[k]["semantic_map"] = semantic_map[k]
-                feature_maps[k].append(pred[k]["semantic_map"]["map_features"][0])
-
-        if self.aerial_encoder is not None:
-            assert "aerial_map" in data, "Aerial map not found in data"
-            # Todo: make aerial encoder compatible w multiple inputs
-            pred[k]["aerial_map"] = self.aerial_encoder({"image": data["aerial_map"]})[
-                "feature_maps"
-            ][0]
-            feature_maps.append(pred["aerial_map"])
+        # Generate neural map
+        map_encoding = self.map_encoder(
+            {
+                "semantic_map": data.get("semantic_map"),
+                "aerial_map": data.get("aerial_map"),
+            }
+        )
+        for i, k in enumerate(map_encoding):
+            pred[k]["f_map"] = map_encoding[k]["map_features"]
 
         for i, k in enumerate(self.conf.bev_mapper.z_max):
 
-            # Fuse neural maps if semantic and aerial
-            if len(feature_maps[k]) == 1:
-                f_map = feature_maps[k][0]
-            elif len(feature_maps) > 1:
-                f_map = self.fuse_neural_maps(feature_maps[k])
-            else:
-                raise ValueError(f"At least one feature map must be created")
+            f_map = pred[k]["f_map"]
+            # TODO: move map mask to the map encoder?
 
             f_bev, valid_bev, confidence_bev = [
                 pred[k]["bev"][key] for key in ["output", "valid_bev", "confidence"]
             ]
 
-            if self.conf.chop_bev:
-                half_depth = f_bev.shape[-1] // 2
-                valid_bev[..., half_depth:] = False
-
             all_valid_mask = {k: torch.ones((f_map[:, 0, ...].shape)).to(valid_bev)}
             map_mask = data.get("map_mask", all_valid_mask)[k]
-
+            # Resize map mask
             if map_mask.shape[-2:] != f_map.shape[-2:]:
                 nan_mask = torch.where(map_mask, 0, torch.nan)
                 nan_mask = torch.nn.functional.interpolate(
@@ -211,7 +157,7 @@ class OrienterNet(BaseModel):
                     align_corners=False,
                 ).squeeze(1)
                 map_mask = ~torch.isnan(nan_mask)
-            pred[k]["map_mask"] = map_mask if "map_mask" in data else None
+            # pred[k]["map_mask"] = map_mask if "map_mask" in data else None
 
             # OrienterNet's Exhaustive Matching
 
@@ -239,12 +185,8 @@ class OrienterNet(BaseModel):
             )
             scores = scores.moveaxis(1, -1)  # B,H,W,N
 
-            if (
-                "semantic_map" in pred[k]
-                and "log_prior" in pred[k]["semantic_map"]
-                and self.conf.apply_map_prior
-            ):
-                log_prior = pred[k]["semantic_map"]["log_prior"][0]
+            if "log_prior" in map_encoding[k] and self.conf.apply_map_prior:
+                log_prior = map_encoding[k]["log_prior"][0]
                 scores = scores + log_prior.unsqueeze(-1)
             # scores_unmasked = scores.clone()
             # pred["scores_unmasked"] = scores.clone()
@@ -379,6 +321,7 @@ class OrienterNet(BaseModel):
                 )
 
         loss["total"] = sum(loss.values())
+        assert torch.all(torch.isfinite(loss["total"]))
 
         return loss
 

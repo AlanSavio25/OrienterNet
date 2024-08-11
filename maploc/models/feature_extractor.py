@@ -105,13 +105,10 @@ class AdaptationBlock(nn.Sequential):
 
 class FeatureExtractor(BaseModel):
     default_conf = {
-        "pretrained": True,
-        # "max_pool_ksize": 1,
-        "num_branches": 1,
-        "scale_factor": 1,
+        "pretrained": False,
         "input_dim": 3,
         "output_scales": [0, 2, 4],  # what scales to adapt and output
-        "output_dim": 128,  # # of channels in output feature maps
+        # "output_dim": 128,  # # of channels in output feature maps
         "encoder": "vgg16",  # string (torchvision net) or list of channels
         "num_downsample": 4,  # how many downsample block (if VGG-style net)
         "decoder": [64, 64, 64, 64],  # list of channels of decoder
@@ -214,41 +211,15 @@ class FeatureExtractor(BaseModel):
             Block = checkpointed(DecoderBlock, do=conf.checkpointed)
             norm = eval(conf.decoder_norm) if conf.decoder_norm else None  # noqa
 
-            decoders = []
-            for _ in range(conf.num_branches):
-                previous = skip_dims[-1]
-                decoder = []
-                for out, skip in zip(conf.decoder, skip_dims[:-1][::-1]):
-                    decoder.append(
-                        Block(previous, skip, out, norm=norm, padding=conf.padding)
-                    )
-                    previous = out
-                decoders.append(nn.ModuleList(decoder))
-            self.decoders = nn.ModuleList(decoders)
+            previous = skip_dims[-1]
+            decoder = []
+            for out, skip in zip(conf.decoder, skip_dims[:-1][::-1]):
+                decoder.append(
+                    Block(previous, skip, out, norm=norm, padding=conf.padding)
+                )
+                previous = out
+            self.decoder = nn.ModuleList(decoder)
 
-        scale_factors = conf.scale_factor
-        scale_blocks = []
-        if isinstance(scale_factors, (int, float)):
-            scale_factors = [scale_factors]
-
-        # Adaptation layers
-        adaptation = []
-        for idx, i in enumerate(conf.output_scales):
-            if conf.decoder is None or i == (len(self.encoder) - 1):
-                input_ = skip_dims[i]
-            else:
-                input_ = conf.decoder[-1 - i]
-
-            # out_dim can be an int (same for all scales) or a list (per scale)
-            dim = conf.output_dim
-            if not isinstance(dim, int):
-                dim = dim[idx]
-
-            block = AdaptationBlock(input_, dim)
-            adaptation.append(block)
-            scale_blocks.append(ScaleBlock(input_, input_, scale_factors[idx]))
-        self.adaptation = nn.ModuleList(adaptation)
-        self.scale_blocks = nn.ModuleList(scale_blocks)
         self.scales = [2**s for s in conf.output_scales]
 
     def _forward(self, data):
@@ -264,31 +235,21 @@ class FeatureExtractor(BaseModel):
             skip_features.append(features)
 
         # We always have a single output map (single scale) per forward pass
-        # module_idx acts as a branch selector.
-        # Each forward pass through this Feature Extractor model goes through 1 branch only.
-        module_idx = data["out_scale_idx"]
+        # encoder_idx indicates which index of conf.out_scales to select
+        encoder_idx = data["encoder_idx"]
 
         if self.conf.decoder:
             pre_features = [skip_features[-1]]
-            if self.conf.num_branches == 1:
-                decoder = self.decoders[0]
-            else:
-                decoder = self.decoders[module_idx]
-            for block, skip in zip(decoder, skip_features[:-1][::-1]):
+            for block, skip in zip(self.decoder, skip_features[:-1][::-1]):
                 pre_features.append(block(pre_features[-1], skip))
             pre_features = pre_features[::-1]  # fine to coarse
         else:
             pre_features = skip_features
 
-        out_features = []
-        out_scales = self.conf.output_scales
-
-        out_scale = out_scales[module_idx]
-        scale_block = self.scale_blocks[module_idx]
-        adapt = self.adaptation[module_idx]
-        out_features = [adapt(scale_block(pre_features[out_scale]))]
-
-        pred = {"feature_maps": out_features, "skip_features": skip_features}
+        out_scale = self.conf.output_scales[encoder_idx]
+        out_features = pre_features[out_scale]
+        assert out_features.shape[-2:] == (256, 256)  # TODO: remove this
+        pred = {"feature_maps": out_features}
         return pred
 
     def loss(self, pred, data):

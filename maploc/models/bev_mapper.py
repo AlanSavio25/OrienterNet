@@ -154,7 +154,7 @@ class BEVMapper(BaseModel):
 
     default_conf = {
         "image_encoder": "???",
-        "multiscale": False,
+        # "multiscale": False,
         "scale_classifier": "linear",  # or 'mlp'
         "scale_mlp": None,
         "fusion_mlp": None,  # only for "inverse" mode
@@ -183,98 +183,69 @@ class BEVMapper(BaseModel):
         self.image_encoder = Encoder(conf.image_encoder.backbone)  # 12M params
         ppm = conf.pixel_per_meter
 
-        if not conf.multiscale:
-            self.projection_polar = PolarProjectionDepth(
-                conf.z_max[0], ppm[0], conf.scale_range, conf.z_min
-            )
-            self.projection_bev = CartesianProjection(
-                conf.z_max[0], conf.x_max[0], ppm[0], conf.z_min
-            )
-            self.template_sampler = TemplateSampler(
-                self.projection_bev.grid_xz, ppm[0], conf.num_rotations
-            )
-
-        else:
-            self.projection_polar = torch.nn.ModuleList(
-                [
-                    PolarProjectionDepth(
-                        conf.z_max[i], ppm[i], conf.scale_range, conf.z_min
-                    )
-                    for i in range(len(conf.z_max))
-                ]
-            )
-            self.projection_bev = torch.nn.ModuleList(
-                [
-                    CartesianProjection(
-                        conf.z_max[i], conf.x_max[i], ppm[i], conf.z_min
-                    )
-                    for i in range(len(conf.z_max))
-                ]
-            )
-            self.template_sampler = torch.nn.ModuleList(
-                [
-                    TemplateSampler(
-                        self.projection_bev[i].grid_xz, ppm[i], conf.num_rotations
-                    )
-                    for i in range(len(conf.z_max))
-                ]
-            )
+        self.projection_polar = torch.nn.ModuleList(
+            [
+                PolarProjectionDepth(
+                    conf.z_max[i], ppm[i], conf.scale_range, conf.z_min
+                )
+                for i in range(len(conf.z_max))
+            ]
+        )
+        self.projection_bev = torch.nn.ModuleList(
+            [
+                CartesianProjection(conf.z_max[i], conf.x_max[i], ppm[i], conf.z_min)
+                for i in range(len(conf.z_max))
+            ]
+        )
+        self.template_sampler = torch.nn.ModuleList(
+            [
+                TemplateSampler(
+                    self.projection_bev[i].grid_xz, ppm[i], conf.num_rotations
+                )
+                for i in range(len(conf.z_max))
+            ]
+        )
 
         if conf.mode == "inverse":
             if conf.feature_depth_fusion == "mlp":
                 # Fuse feature and depth score to predict a new feature
-                if not conf.multiscale:  # TODO: REMOVE
-                    self.fusion_mlp = MLP(
-                        conf.fusion_mlp
-                    )  # input_dim: feat_dim+score, out:feat_dim
-                else:
-                    self.fusion_mlp = torch.nn.ModuleList(
-                        [MLP(conf.fusion_mlp) for i in range(len(conf.z_max))]
-                    )  # 66k params
+                self.fusion_mlp = torch.nn.ModuleList(
+                    [MLP(conf.fusion_mlp) for i in range(len(conf.z_max))]
+                )  # 66k params
 
             # TODO: rename z_max to max_depth?
 
-            if not conf.multiscale:
-                self.grid, self.grid_t_cam, self.cam_xy_pts, self.grid_xy_pts = (
-                    build_frustum_grid(
-                        cell_size=conf.grid_cell_size[0],
-                        depth=conf.z_max[0],
-                        width=conf.x_max[0] * 2 + conf.grid_cell_size[0],
-                    )
+            self.cam_xy_pts = []
+            bev_downsampling_nets = []
+            self.bev_padding = []
+            self.bev_downscale_factor = []
+            for i in range(len(conf.z_max)):
+                _, _, cam_xy_pts, _ = build_frustum_grid(
+                    cell_size=conf.grid_cell_size[i],
+                    depth=conf.z_max[i],
+                    width=conf.x_max[i] * 2 + conf.grid_cell_size[i],
                 )
-
-            else:
-                self.cam_xy_pts = []
-                bev_downsampling_nets = []
-                self.bev_padding = []
-                self.bev_downscale_factor = []
-                for i in range(len(conf.z_max)):
-                    _, _, cam_xy_pts, _ = build_frustum_grid(
-                        cell_size=conf.grid_cell_size[i],
-                        depth=conf.z_max[i],
-                        width=conf.x_max[i] * 2 + conf.grid_cell_size[i],
+                self.cam_xy_pts.append(cam_xy_pts)
+                if conf.grid_cell_size[i] != 1 / conf.pixel_per_meter[i]:
+                    assert conf.grid_cell_size[i] < (
+                        1 / conf.pixel_per_meter[i]
+                    )  # grid is always finer than final bev
+                    scale_factor = int(
+                        (1 / conf.pixel_per_meter[i]) / conf.grid_cell_size[i]
                     )
-                    self.cam_xy_pts.append(cam_xy_pts)
-                    if conf.grid_cell_size[i] != 1 / conf.pixel_per_meter[i]:
-                        assert conf.grid_cell_size[i] < (
-                            1 / conf.pixel_per_meter[i]
-                        )  # grid is always finer than final bev
-                        scale_factor = int(
-                            (1 / conf.pixel_per_meter[i]) / conf.grid_cell_size[i]
-                        )
-                        downsample = torch.nn.Conv2d(
-                            conf.latent_dim,
-                            conf.latent_dim,
-                            scale_factor + 1,
-                            stride=scale_factor,
-                        )
-                        padding = (0,) + (
-                            int(scale_factor / 2),
-                        ) * 3  # left, right, top, bottom
-                        bev_downsampling_nets.append(downsample)
-                        self.bev_padding.append(padding)
-                        self.bev_downscale_factor.append(scale_factor)
-                self.bev_downsampling = torch.nn.ModuleList(bev_downsampling_nets)
+                    downsample = torch.nn.Conv2d(
+                        conf.latent_dim,
+                        conf.latent_dim,
+                        scale_factor + 1,
+                        stride=scale_factor,
+                    )
+                    padding = (0,) + (
+                        int(scale_factor / 2),
+                    ) * 3  # left, right, top, bottom
+                    bev_downsampling_nets.append(downsample)
+                    self.bev_padding.append(padding)
+                    self.bev_downscale_factor.append(scale_factor)
+            self.bev_downsampling = torch.nn.ModuleList(bev_downsampling_nets)
 
         elif conf.mode != "forward":
             raise ValueError(
@@ -282,39 +253,26 @@ class BEVMapper(BaseModel):
                 'inverse' (SNAP). Got: {self.conf.mode}"
             )
 
-        if not conf.multiscale:
-
-            if conf.scale_classifier == "linear" or conf.mode == "forward":
-                self.scale_classifier = torch.nn.Linear(
-                    conf.latent_dim, conf.num_scale_bins
-                )
-            elif conf.scale_classifier == "mlp":
-                assert conf.scale_mlp is not None
-                self.scale_classifier = MLP(conf.scale_mlp)
-        else:
-            if conf.scale_classifier == "linear" or conf.mode == "forward":
-                self.scale_classifier = torch.nn.ModuleList(
-                    [
-                        torch.nn.Linear(conf.latent_dim, conf.num_scale_bins)
-                        for i in range(len(conf.z_max))
-                    ]
-                )
-            elif conf.scale_classifier == "mlp":
-                assert conf.scale_mlp is not None
-                self.scale_classifier = torch.nn.ModuleList(
-                    [MLP(conf.scale_mlp) for i in range(len(conf.z_max))]  # 4257 params
-                )
+        if conf.scale_classifier == "linear" or conf.mode == "forward":
+            self.scale_classifier = torch.nn.ModuleList(
+                [
+                    torch.nn.Linear(conf.latent_dim, conf.num_scale_bins)
+                    for i in range(len(conf.z_max))
+                ]
+            )
+        elif conf.scale_classifier == "mlp":
+            assert conf.scale_mlp is not None
+            self.scale_classifier = torch.nn.ModuleList(
+                [MLP(conf.scale_mlp) for i in range(len(conf.z_max))]  # 4257 params
+            )
 
         self.vertical_pooling = VerticalPooling({"pooling": conf.vertical_pooling})
         if conf.bev_net is None:
             self.bev_net = None
         else:
-            if not conf.multiscale:
-                self.bev_net = BEVNet(conf.bev_net)
-            else:
-                self.bev_net = torch.nn.ModuleList(
-                    [BEVNet(conf.bev_net) for i in range(len(conf.z_max))]
-                )  # 72k params
+            self.bev_net = torch.nn.ModuleList(
+                [BEVNet(conf.bev_net) for i in range(len(conf.z_max))]
+            )  # 72k params
 
         if conf.bev_net is None:
             self.feature_projection = torch.nn.Linear(
@@ -329,12 +287,10 @@ class BEVMapper(BaseModel):
 
         # Extract image features.
         level = 0
-        # when multiscale, f_image will produce 256 dims.
+
         f_image = self.image_encoder(data)["feature_maps"][level]
         camera = data["camera"].scale(1 / self.image_encoder.scales[level])
         camera = camera.to(data["image"].device, non_blocking=True)
-
-        # when multiscale, the scale classifier processes both sets of features to produce scales.
 
         if self.conf.mode == "forward":
 
@@ -519,5 +475,4 @@ class BEVMapper(BaseModel):
                 pred[k]["bev"]["valid_bev"] = valid_bev
             pred["features_image"] = f_image
 
-        # pred.update({"features_image": f_image})
         return pred
