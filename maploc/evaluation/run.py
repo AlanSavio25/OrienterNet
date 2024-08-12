@@ -57,6 +57,7 @@ def evaluate_single_image(
     progress: bool = True,
     mask_index: Optional[Tuple[int]] = None,
     has_gps: bool = False,
+    **kwargs,
 ):
     ppm = model.model.conf.pixel_per_meter
     metrics = MetricCollection(model.model.metrics())
@@ -225,7 +226,7 @@ def evaluate(
 
     if output_dir is not None:
         output_dir.mkdir(exist_ok=True, parents=True)
-        if callback is None:
+        if callback is None and kwargs["plot_images"]:
             if sequential:
                 callback = plot_example_sequential
             else:

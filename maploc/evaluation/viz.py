@@ -78,7 +78,7 @@ def plot_example_single(
     axes[1].images[0].set_interpolation("none")
     axes[2].images[0].set_interpolation("none")
     Colormap.add_colorbar()
-    plot_nodes(1, rasters[2])
+    # plot_nodes(1, rasters[2])
 
     if show_gps and uv_gps is not None:
         plot_pose([1], uv_gps, c="blue")
@@ -101,7 +101,7 @@ def plot_example_single(
     plt.show()
     if out_dir is not None:
         name_ = name.replace("/", "_")
-        p = str(out_dir / f"{scene}_{name_}_{{}}.pdf")
+        p = str(out_dir / f"{scene}_{name_}_{{}}.png")
         save_plot(p.format("pred"))
         plt.close()
 

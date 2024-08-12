@@ -198,8 +198,22 @@ class OrienterNet(BaseModel):
                 "uv_expectation", self.conf.pixel_per_meter
             ),
             "yaw_max_error": AngleError("yaw_max"),
+            "xy_recall_0_5m": Location2DRecall(
+                0.5, self.conf.pixel_per_meter, "uv_max"
+            ),
+            "xy_recall_1m": Location2DRecall(1.0, self.conf.pixel_per_meter, "uv_max"),
             "xy_recall_2m": Location2DRecall(2.0, self.conf.pixel_per_meter, "uv_max"),
             "xy_recall_5m": Location2DRecall(5.0, self.conf.pixel_per_meter, "uv_max"),
+            "xy_recall_10m": Location2DRecall(
+                10.0, self.conf.pixel_per_meter, "uv_max"
+            ),
+            "xy_recall_20m": Location2DRecall(
+                20.0, self.conf.pixel_per_meter, "uv_max"
+            ),
+            "yaw_recall_0_5°": AngleRecall(0.5, "yaw_max"),
+            "yaw_recall_1°": AngleRecall(1.0, "yaw_max"),
             "yaw_recall_2°": AngleRecall(2.0, "yaw_max"),
             "yaw_recall_5°": AngleRecall(5.0, "yaw_max"),
+            "yaw_recall_10°": AngleRecall(10.0, "yaw_max"),
+            "yaw_recall_20°": AngleRecall(20.0, "yaw_max"),
         }
