@@ -48,7 +48,7 @@ class MapEncoder(BaseModel):
 
         # Early fusion combines both inputs before passing through Feature Extractor
         input_dim = (
-            len(conf.num_classes) + 1
+            len(conf.num_classes) + (1 if "aerial" in conf.map_types else 0)
         ) * conf.embedding_dim  # * len(conf.map_types)
         output_dim = conf.output_dim  # 8
         if output_dim is None:

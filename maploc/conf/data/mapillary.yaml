@@ -25,7 +25,7 @@ loading:
 # map data
 map_types:
   - semantic # osm
-  - aerial
+  # - aerial
 z_max: ${model.bev_mapper.z_max} # TODO: remove this
 bev_ppm: ${model.bev_mapper.pixel_per_meter} # TODO: remove this
 num_classes:
