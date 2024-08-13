@@ -248,7 +248,7 @@ class FeatureExtractor(BaseModel):
 
         out_scale = self.conf.output_scales[encoder_idx]
         out_features = pre_features[out_scale]
-        assert out_features.shape[-2:] == (256, 256)  # TODO: remove this
+        # assert out_features.shape[-2:] == (256, 256), f"Shape is {out_features.shape}"  # TODO: remove this
         pred = {"feature_maps": out_features}
         return pred
 
