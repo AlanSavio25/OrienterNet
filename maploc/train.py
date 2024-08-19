@@ -153,15 +153,15 @@ def train(cfg: DictConfig, job_id: Optional[int] = None):
 
     strategy = "auto"
     if cfg.experiment.gpus > 1:
-        strategy = pl.strategies.DDPStrategy(find_unused_parameters=False)
-        for split in ["train", "val"]:
-            cfg.data["loading"][split].batch_size = (
-                cfg.data["loading"][split].batch_size // cfg.experiment.gpus
-            )
-            cfg.data["loading"][split].num_workers = int(
-                (cfg.data["loading"][split].num_workers + cfg.experiment.gpus - 1)
-                / cfg.experiment.gpus
-            )
+        strategy = pl.strategies.DDPStrategy(find_unused_parameters=True)
+        # for split in ["train", "val"]:
+        #     cfg.data["loading"][split].batch_size = (
+        #         cfg.data["loading"][split].batch_size // cfg.experiment.gpus
+        #     )
+        #     cfg.data["loading"][split].num_workers = int(
+        #         (cfg.data["loading"][split].num_workers + cfg.experiment.gpus - 1)
+        #         / cfg.experiment.gpus
+        #     )
     data = data_modules[cfg.data.get("name", "mapillary")](cfg.data)
 
     tb_args = {"name": cfg.experiment.name, "version": ""}
