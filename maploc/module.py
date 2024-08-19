@@ -101,11 +101,15 @@ class GenericModule(pl.LightningModule):
         self.log_dict(self.metrics_val, sync_dist=True)
         self.losses_val.update(losses)
         self.log_dict(self.losses_val, sync_dist=True)
-        if batch_idx == 0 or batch_idx == 20:
+        if (batch_idx == 0 or batch_idx == 20) and self.global_rank == 0:
             batch = move_data_to_device(batch, "cpu")
             batch = apply_to_collection(batch, torch.Tensor, lambda x: x[0])
+            batch = apply_to_collection(batch, Transform2D, lambda x: x[0])
+            batch = apply_to_collection(batch, Transform2D, lambda x: x.unsqueeze(0)) # todo: refactor plot_example_single
             pred = move_data_to_device(pred, "cpu")
             pred = apply_to_collection(pred, torch.Tensor, lambda x: x[0])
+            pred = apply_to_collection(pred, Transform2D, lambda x: x[0])
+            pred = apply_to_collection(pred, Transform2D, lambda x: x.unsqueeze(0))
             results = {k[4:]: results[k] for k in results}
             plots = plot_example_single(
                 0,

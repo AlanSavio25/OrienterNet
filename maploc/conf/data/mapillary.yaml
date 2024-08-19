@@ -20,8 +20,8 @@ loading:
     batch_size: 4 # 12
     num_workers: ${.batch_size}
   val:
-    batch_size: 1 # ${..train.batch_size}
-    num_workers: 1 # ${.batch_size}
+    batch_size: ${..train.batch_size}
+    num_workers: ${.batch_size}
 # map data
 map_types:
   - semantic # osm
