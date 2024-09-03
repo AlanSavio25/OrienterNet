@@ -222,7 +222,7 @@ class OrienterNet(BaseModel):
                 bev_ij_pts = self.bev_mapper.cam_xy_pts[i] / resolution
                 # BEV faces east in the map frame by default, so we rotate the coords by 90deg
                 bev_ij_pts = Transform2D(torch.Tensor([-90, 0, 0])) @ bev_ij_pts
-                delta_p = 0.5  # m
+                delta_p = 0.25  # m
                 range_p = 2  # m
                 delta_r = 1.0  # deg
                 range_r = 5.0  # deg
