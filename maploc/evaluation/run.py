@@ -779,18 +779,28 @@ def select_images_from_log(log_paths):
             log_data = read_json(Path(log_path))
             if not log_data:
                 raise ValueError("Log data is empty")
-            sorted_names = sorted(log_data["names"])
-            logs[i] = list(
-                zip(
-                    log_data["errors"]["xy_max_error_32"],
-                    log_data["errors"]["xy_max_error_128"],
-                    log_data["errors"]["xy_max_error_chain"],
-                    log_data["names"],
-                )
-            )
-            logs[i] = [
-                x[:-1] for x in sorted(logs[i], key=lambda x: x[-1])
-            ]  # skip the last which is the name
+            if i >= 1: # todo: remove this
+                sorted_names = sorted(log_data["names"])
+            # logs[i] = list(
+            #     zip(
+            #         log_data["errors"]["xy_max_error_32"],
+            #         log_data["errors"]["xy_max_error_128"],
+            #         log_data["errors"]["xy_max_error_chain"],
+            #         log_data["names"],
+            #     )
+            # )
+            if i == 0:
+
+                # logs[i] = list(zip(log_data["errors"]["xy_max_error"], log_data["names"]))
+                logs[i] = [log_data["errors"]["xy_max_error"]]
+            else:
+                logs[i] = list(zip(log_data['errors']["xy_max_error_32"], log_data["errors"]["xy_max_error_chain"], log_data["names"]))
+                # logs[i] = list(log_data["errors"]["xy_max_error_chain"])
+
+            # We must sort
+            # logs[i] = [
+            #     x[:-1] for x in sorted(logs[i], key=lambda x: x[-1])
+            # ]  # skip the last which is the name
 
         # selected_images = [n for (n, f, c) in list(zip(sorted_names, logs[0], logs[len(log_paths)-1])) if c < 5 and f > 12]
         # selected_images = [n for (n, f, c, C) in list(zip(sorted_names, logs[0], logs[1], logs[2])) if (f > 0.5 and c <= 0.5) or (f > 1 and c <= 1) or (f > 2 and c <= 2)]
@@ -806,14 +816,22 @@ def select_images_from_log(log_paths):
         selected_images = [
             n
             for (n, single, multiscale1) in list(zip(sorted_names, logs[0], logs[1]))
+            # if (
+            #     single[0] > 15
+            #     and single[1] > 15  # 32m
+            #     and single[2] > 15  # 128m
+            #     and  # chain
+            #     # multiscale1[0] > 15 and
+            #     # multiscale1[1] > 15 and
+            #     multiscale1[2] < 15
+            # )
             if (
-                single[0] > 15
-                and single[1] > 15  # 32m
-                and single[2] > 15  # 128m
-                and  # chain
+                single[0] > 20
+                # and single[1] > 15  # 32m
+                # and single[2] > 15  # 128m
+                and
                 # multiscale1[0] > 15 and
-                # multiscale1[1] > 15 and
-                multiscale1[2] < 15
+                multiscale1[1] < 3
             )
         ][
             :25
