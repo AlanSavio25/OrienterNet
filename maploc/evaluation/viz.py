@@ -71,6 +71,7 @@ def plot_example_single(
 
         if k == "chain":
             tile_t_gps = data["tile_t_gps"][32.0].squeeze(0)
+            pred[k]["scores_unmasked"] = pred[32.0]["scores_unmasked"]
         else:
             tile_t_gps = data["tile_t_gps"][k].squeeze(0)
 
