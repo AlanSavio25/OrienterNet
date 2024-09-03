@@ -73,7 +73,8 @@ model:
       checkpointed: false
       # mlp:
         # layers:
-        # input_dim:
+        # - 128
+        # input_dim: ${..latent_dim}
   ransac_matcher: false
   chop_bev: false
   normalize_features: false
