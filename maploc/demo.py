@@ -378,6 +378,7 @@ class Demo:
         if out_dir is None:
             plt.show()
         else:
+            Path(out_dir).mkdir(exist_ok=True, parents=True)
             p = str(Path(out_dir) / Path(image_path).stem) + f"_{{}}.png"
             save_plot(p.format("pred"))
             plt.close()
