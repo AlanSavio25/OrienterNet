@@ -93,7 +93,7 @@ class TileManager:
         projection: Projection,
         bbox: BoundaryBox,
         ppm: int,
-        bing_token: str,
+        bing_token: Optional[str] = None,
         path: Optional[Path] = None,
         tile_size: int = 128,
     ):
