@@ -155,7 +155,7 @@ class Demo:
 
         if load_from_hub:
             CHECKPOINT_URL = "https://github.com/AlanSavio25/OrienterNet/releases/download/prerelease/prerelease.ckpt"
-            ckpt_path = Path("./experiment_demo") / experiment_or_path
+            ckpt_path = Path(experiment_or_path)
             if not ckpt_path.exists():
                 ckpt_path.parent.mkdir(exist_ok=True, parents=True)
                 torch.hub.download_url_to_file(CHECKPOINT_URL, ckpt_path)
@@ -442,9 +442,9 @@ class Demo:
 if __name__ == "__main__":
     demo = Demo(
         load_from_hub=True,
-        experiment_or_path="prerelease/prerelease.ckpt",
-        num_rotations=64,
-        device="cpu",
+        experiment_or_path="./experiment_demo/prerelease/prerelease.ckpt"
+        # num_rotations=64,
+        # device="cpu",
     )
     demo.run_demo(
         image_path="assets/query_vancouver_1.jpeg",
