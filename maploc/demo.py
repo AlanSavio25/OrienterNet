@@ -1,9 +1,21 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates.
+from maploc.osm.tiling import TileManager
+from maploc.utils.viz_localization import (
+    likelihood_overlay,
+    plot_dense_rotations,
+    add_circle_inset,
+)
+from maploc.utils.viz_2d import features_to_RGB
+from maploc.osm.viz import Colormap, plot_nodes
+from maploc.utils.viz_2d import plot_images
 
 from typing import Optional, Tuple, Dict
 
+from maploc.utils.viz_localization import plot_pose, plot_bev
+from maploc.utils.wrappers import Transform2D
 import numpy as np
 import torch
+from pathlib import Path
 
 from . import logger
 from .data.image import pad_image, rectify_image, resize_image
@@ -19,6 +31,8 @@ from scipy.spatial.transform import Rotation
 
 from lightning_fabric.utilities.apply_func import move_data_to_device
 from lightning_utilities.core.apply_func import apply_to_collection
+import matplotlib.pyplot as plt
+from .utils.viz_2d import features_to_RGB, plot_images, save_plot
 
 try:
     from geopy.geocoders import Nominatim
@@ -133,10 +147,19 @@ def read_input_image(
 class Demo:
     def __init__(
         self,
+        load_from_hub=False,
         experiment_or_path: Optional[str] = "OrienterNet_MGL",
         device=None,
-        **kwargs
+        **kwargs,
     ):
+
+        if load_from_hub:
+            CHECKPOINT_URL = "https://github.com/AlanSavio25/OrienterNet/releases/download/prerelease/prerelease.ckpt"
+            ckpt_path = Path("./experiment_demo") / experiment_or_path
+            if not ckpt_path.exists():
+                ckpt_path.parent.mkdir(exist_ok=True, parents=True)
+                torch.hub.download_url_to_file(CHECKPOINT_URL, ckpt_path)
+
         if experiment_or_path in pretrained_models:
             experiment_or_path, _ = pretrained_models[experiment_or_path]
         path = resolve_checkpoint_path(experiment_or_path)
@@ -262,3 +285,168 @@ class Demo:
             semantic_map,
             pred,
         )
+
+    def run_demo(
+        self,
+        image_path="assets/query_vancouver_1.jpeg",
+        prior_address="Vancouver Waterfront Station",
+        out_dir=None,
+    ):
+
+        image, camera, roll_pitch, proj, bbox, prior_latlon = read_input_image(
+            image_path,
+            prior_address=prior_address,
+            tile_size_meters=128,  # try 64, 256, etc.
+        )
+        logger.info(f"Finished reading and calibrating image")
+
+        ppm_list = self.config.data.pixel_per_meter
+        canvas = {}
+        for i, z_max in enumerate(self.config.data.z_max):
+            ppm = ppm_list[i]
+            tiler = TileManager.from_bbox(proj, bbox + 10, ppm)
+            canvas[z_max] = tiler.query(bbox)
+
+        # Show the inputs to the model: image and raster map
+        # from maploc.osm.viz import Colormap, plot_nodes
+        # from maploc.utils.viz_2d import plot_images
+
+        # depth32m = self.config.data.z_max[0]  # corresponds to finer ppm
+        # map_viz = Colormap.apply(canvas[depth32m].raster)
+        # plot_images([image, map_viz], titles=["input image", "OpenStreetMap raster"])
+        # plot_nodes(1, canvas[depth32m].raster[2], fontsize=6, size=10)
+
+        logger.info("Finished pulling OSM data. Starting inference...")
+        # Run the inference
+        tile_T_cam_max, map_T_cam_max, prob, neural_map, image, semantic_map, pred = (
+            self.localize(
+                image,
+                camera,
+                canvas,
+                roll_pitch=roll_pitch,  # cam_R_gcam=cam_R_gcam
+            )
+        )
+
+        logger.info("Inference complete. Preparing visualizations...")
+
+        depth32m = self.config.data.z_max[0]  # corresponds to finer ppm
+        # Get the memory-layout map raster from localize() output
+        map_viz = Colormap.apply(semantic_map[depth32m])
+
+        # Visualize the predictions
+        overlay = likelihood_overlay(
+            prob.squeeze(0).numpy().max(-1), map_viz.mean(-1, keepdims=True)
+        )
+        (neural_map_rgb,) = features_to_RGB(neural_map.squeeze(0).numpy())
+
+        overlay, neural_map_rgb, map_viz = [
+            np.swapaxes(x, 0, 1) for x in (overlay, neural_map_rgb, map_viz)
+        ]
+
+        map_T_cam_max = Transform2D.to_pixels(tile_T_cam_max, 1 / 2)
+
+        plot_images(
+            [image.permute(1, 2, 0), map_viz, overlay, neural_map_rgb],
+            titles=["input image", "OpenStreetMap raster", "prediction", "neural map"],
+            origins=["upper", "lower", "lower", "lower"],
+        )
+        axes = plt.gcf().axes
+        ax = axes[2]
+        ax.scatter(*canvas[32.0].to_uv(bbox.center), s=5, c="red")
+        plot_dense_rotations(ax, prob.squeeze(0), w=0.005, s=1 / 25)
+
+        plot_pose(
+            [1],
+            map_T_cam_max.t.squeeze(0),
+            map_T_cam_max.angle.squeeze(0),
+            c="k",
+            refactored=True,
+            dot=False,
+            s=1 / 60,
+        )
+        # add_circle_inset(ax, uv) # still broken
+
+        # BEV overlay. broken
+        # (bev,) = features_to_RGB(pred[128.0]["features_bev"].squeeze(0).numpy(), masks=[pred[128.0]["valid_bev"].squeeze(0).numpy()])
+        # increase 128m bev's resolution
+        # bev = torch.nn.functional.interpolate(
+        #                 torch.from_numpy(bev).unsqueeze(0).moveaxis(-1, -3), scale_factor=4, mode="bilinear"
+        #             ).moveaxis(-3, -1).squeeze(0).numpy()
+        # axes[1].images[0].set_interpolation("none")
+        # plot_bev(bev, uv=map_T_cam_max.t.squeeze(0), yaw=map_T_cam_max.angle.squeeze(0), zorder=10, ax=axes[2])
+
+        if out_dir is None:
+            plt.show()
+        else:
+            p = str(Path(out_dir) / Path(image_path).stem) + f"_{{}}.png"
+            save_plot(p.format("pred"))
+            plt.close()
+
+        # Visualize BEV + Confidence
+        titles = []
+        bevs = []
+        for z_max in self.config.data.z_max:
+            mask_bev = pred[z_max]["valid_bev"].squeeze(0)
+            (bev,) = features_to_RGB(
+                pred[z_max]["features_bev"].squeeze(0).numpy(), masks=[mask_bev.numpy()]
+            )
+            conf_q = torch.log(pred[z_max]["bev"]["confidence"])
+            conf_q = conf_q.masked_fill(~mask_bev, np.nan)
+            bevs.append(np.swapaxes(bev, 0, 1))
+            bevs.append(np.swapaxes(conf_q.squeeze(0), 0, 1))
+            titles.append(f"BEV depth: {z_max}m")
+            titles.append(f"BEV Confidence: {z_max}m")
+        plot_images(bevs, titles, origins=["lower", "lower"] * 2, cmaps="jet")
+        if out_dir is None:
+            plt.show()
+        else:
+            save_plot(p.format("bev"))
+            plt.close()
+
+        # Visualize Image Features and Max Scale Score
+        (fine_im_feat,) = features_to_RGB(pred["features_image"][0, :128, ...].numpy())
+        (coarse_im_feat,) = features_to_RGB(
+            pred["features_image"][0, 128:, ...].numpy()
+        )
+
+        max_scores = []
+        for z_max in self.config.data.z_max:
+            scales_scores = pred[z_max]["pixel_scales"].squeeze(0)
+            log_prob = torch.nn.functional.log_softmax(scales_scores, dim=-1)
+            max_scores.append(log_prob.max(-1).values.exp())
+
+        plot_images(
+            [fine_im_feat, coarse_im_feat, *max_scores],
+            titles=[
+                "Fine Image Features",
+                "Coarse Image Features",
+                "Fine Max Scale Score (red=high)",
+                "Coarse Max Scale Score (red=high)",
+            ],
+            origins=["upper", "upper", "upper", "upper"],
+            cmaps="jet",
+        )
+
+        if out_dir is None:
+            plt.show()
+        else:
+            save_plot(p.format("scales"))
+            plt.close()
+
+        logger.info(f"Done")
+
+        return
+
+
+if __name__ == "__main__":
+    demo = Demo(
+        load_from_hub=True,
+        experiment_or_path="prerelease/prerelease.ckpt",
+        num_rotations=64,
+        device="cpu",
+    )
+    demo.run_demo(
+        image_path="assets/query_vancouver_1.jpeg",
+        prior_address="Vancouver Waterfront Station",
+        out_dir="demo_figures/",
+    )
