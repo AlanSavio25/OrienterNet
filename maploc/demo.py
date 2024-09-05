@@ -15,6 +15,7 @@ from .utils.exif import EXIF
 from .utils.geo import BoundaryBox, Projection
 from .utils.io import read_image
 from .utils.wrappers import Camera, Transform2D
+from scipy.spatial.transform import Rotation
 
 from lightning_fabric.utilities.apply_func import move_data_to_device
 from lightning_utilities.core.apply_func import apply_to_collection
@@ -29,16 +30,17 @@ except ImportError:
 try:
     from gradio_client import Client
 
-    # calibrator = Client("https://jinlinyi-perspectivefields.hf.space/")
-    calibrator = None
+    calibrator = Client("https://jinlinyi-perspectivefields.hf.space/")
+    # calibrator = None
 except (ImportError, ValueError):
     calibrator = None
 
 
 def image_calibration(image_path):
     logger.info("Calling the PerspectiveFields calibrator, this may take some time.")
-    result = calibrator.submit(
-        image_path, "NEW:Paramnet-360Cities-edina-centered", api_name="/predict"
+    result = calibrator.predict(
+        # image_path, "NEW:Paramnet-360Cities-edina-centered", api_name="/predict" # broken
+        image_path, "PersNet_Paramnet-GSV-centered", api_name="/predict"
     )
     result = dict(r.rsplit(" ", 1) for r in result[1].split("\n"))
     roll_pitch = float(result["roll"]), float(result["pitch"])
@@ -106,17 +108,14 @@ def read_input_image(
     latlon = np.array(latlon)
 
     roll_pitch = None
-    cam_R_gcam = torch.eye(3)
-    calibrator = None
     if calibrator is not None:
         roll_pitch, fov = image_calibration(image_path)
-        # cam_R_gcam =  # TODO: compute cam_R_gcam from roll pitch
         logger.info("Using (roll, pitch) %s.", roll_pitch)
     else:
         logger.info("Could not call PerspectiveFields, maybe install gradio_client?")
 
 
-    logger.info("Using cam_R_gcam %s.", cam_R_gcam)
+    # logger.info("Using cam_R_gcam %s.", cam_R_gcam)
 
     camera = camera_from_exif(exif, fov)
     if camera is None:
@@ -127,7 +126,7 @@ def read_input_image(
     proj = Projection(*latlon)
     center = proj.project(latlon)
     bbox = BoundaryBox(center, center) + tile_size_meters
-    return image, camera, cam_R_gcam, proj, bbox, latlon
+    return image, camera, roll_pitch, proj, bbox, latlon
 
 
 class Demo:
@@ -161,8 +160,8 @@ class Demo:
         image: np.ndarray,
         camera: Camera,
         canvas: Dict,
-        cam_R_gcam: torch.Tensor
-        # roll_pitch: Optional[Tuple[float]] = None,
+        # cam_R_gcam: torch.Tensor
+        roll_pitch: Optional[Tuple[float]] = None,
     ):
         assert image.shape[:2][::-1] == tuple(camera.size.tolist())
         target_focal_length = self.config.data.resize_image / 2
@@ -172,14 +171,15 @@ class Demo:
         image = torch.from_numpy(image).permute(2, 0, 1).float().div_(255)
         valid = None
         # we don't need to rectify if we're using 3D grid projection. cam_R_gcam must be provided to model.
-        # if roll_pitch is not None:
-        #     roll, pitch = roll_pitch
-        #     image, valid = rectify_image(
-        #         image,
-        #         camera.float(),
-        #         roll=-roll,
-        #         pitch=-pitch,
-        #     )
+        if roll_pitch is not None:
+            roll, pitch = roll_pitch
+            R = Rotation.from_euler("ZX", (-roll, -pitch), degrees=True).as_matrix()
+            R = torch.from_numpy(R)
+            image, valid = rectify_image(
+                image,
+                camera.float(),
+                cam_R_gcam=R
+            )
         image, _, camera, *maybe_valid = resize_image(
             image, size.tolist(), camera=camera, valid=valid
         )
@@ -199,7 +199,8 @@ class Demo:
         return dict(
             image=image,
             semantic_map=semantic_map,
-            cam_R_gcam=cam_R_gcam.float(),
+            roll_pitch=roll_pitch,
+            cam_R_gcam=torch.eye(3),
             camera=camera.float(),
             valid=valid,
         )
@@ -229,7 +230,6 @@ class Demo:
         # Chain log_probs of 32m and 128m branches
         scores = [pred[k]["scores"].to('cpu') for k in self.config.data.z_max]
 
-        # crop_size_meters = model.cfg.data.crop_size_meters[0]
         fine_num_pixels = max([score_volume.shape[-2] for score_volume in scores])
         upsample_ppm = max(self.config.data.pixel_per_meter)
         h = w = fine_num_pixels 
