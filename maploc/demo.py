@@ -40,7 +40,9 @@ def image_calibration(image_path):
     logger.info("Calling the PerspectiveFields calibrator, this may take some time.")
     result = calibrator.predict(
         # image_path, "NEW:Paramnet-360Cities-edina-centered", api_name="/predict" # broken
-        image_path, "PersNet_Paramnet-GSV-centered", api_name="/predict"
+        image_path,
+        "PersNet_Paramnet-GSV-centered",
+        api_name="/predict",
     )
     result = dict(r.rsplit(" ", 1) for r in result[1].split("\n"))
     roll_pitch = float(result["roll"]), float(result["pitch"])
@@ -114,7 +116,6 @@ def read_input_image(
     else:
         logger.info("Could not call PerspectiveFields, maybe install gradio_client?")
 
-
     # logger.info("Using cam_R_gcam %s.", cam_R_gcam)
 
     camera = camera_from_exif(exif, fov)
@@ -175,11 +176,7 @@ class Demo:
             roll, pitch = roll_pitch
             R = Rotation.from_euler("ZX", (-roll, -pitch), degrees=True).as_matrix()
             R = torch.from_numpy(R)
-            image, valid = rectify_image(
-                image,
-                camera.float(),
-                cam_R_gcam=R
-            )
+            image, valid = rectify_image(image, camera.float(), cam_R_gcam=R)
         image, _, camera, *maybe_valid = resize_image(
             image, size.tolist(), camera=camera, valid=valid
         )
@@ -207,7 +204,7 @@ class Demo:
 
     def localize(self, image: np.ndarray, camera: Camera, canvas: Canvas, **kwargs):
         data = self.prepare_data(image, camera, canvas, **kwargs)
-        data_ = apply_to_collection(data, (torch.Tensor,Camera), lambda x: x[None])
+        data_ = apply_to_collection(data, (torch.Tensor, Camera), lambda x: x[None])
         # data_ = {k: v.to(self.device)[None] for k, v in data.items() if isinstance(v, torch.Tensor)}
         with torch.no_grad():
             pred = self.model(data_)
@@ -226,23 +223,19 @@ class Demo:
         # )
         # xyr = argmax_xyr(lp_xyr).cpu()
 
-
         # Chain log_probs of 32m and 128m branches
-        scores = [pred[k]["scores"].to('cpu') for k in self.config.data.z_max]
+        scores = [pred[k]["scores"].to("cpu") for k in self.config.data.z_max]
 
         fine_num_pixels = max([score_volume.shape[-2] for score_volume in scores])
         upsample_ppm = max(self.config.data.pixel_per_meter)
-        h = w = fine_num_pixels 
+        h = w = fine_num_pixels
         scores = [
             torch.nn.functional.interpolate(
                 score.moveaxis(-1, -3), size=(int(h), int(w)), mode="bilinear"
             ).moveaxis(-3, -1)
             for score in scores
         ]
-        log_probs = [
-            log_softmax_spatial(score)
-            for score in scores
-        ]
+        log_probs = [log_softmax_spatial(score) for score in scores]
         log_probs_chained = log_softmax_spatial(torch.stack(log_probs).sum(0))
         probs_chained = log_probs_chained.exp().cpu()
         del scores, log_probs
@@ -252,13 +245,20 @@ class Demo:
         yaw_max = 180 - uvr_max[..., -1]
         map_T_max = Transform2D.from_degrees(yaw_max.unsqueeze(-1), ij_max)
 
-
         tile_T_cam_max_chained = (
             Transform2D.from_pixels(map_T_max, 1 / upsample_ppm)
         ).cpu()
 
         f_map_fine = pred[32.0]["features_map"].cpu()
-        image = data["image"].cpu() # padded/rectified image
-        semantic_map = data["semantic_map"] # this contains the memory-layout raster
+        image = data["image"].cpu()  # padded/rectified image
+        semantic_map = data["semantic_map"]  # this contains the memory-layout raster
 
-        return tile_T_cam_max_chained, map_T_max, probs_chained, f_map_fine, image, semantic_map
+        return (
+            tile_T_cam_max_chained,
+            map_T_max,
+            probs_chained,
+            f_map_fine,
+            image,
+            semantic_map,
+            pred,
+        )
