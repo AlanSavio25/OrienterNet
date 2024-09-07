@@ -4,15 +4,34 @@ import torch
 
 from maploc.utils.wrappers import Transform2D
 
+def build_query_grid(f_bev):
+    """Computes coordinates for each pixel in f_bev"""
+
+    h, w = f_bev.shape[-2:]  # h = 129, w = 64
+    bev_t_cam = torch.tensor([(h - 1) / 2, 0.0])
+
+    bev_ij_pts = (
+        torch.stack(torch.unravel_index(torch.arange(h * w), (h, w)), -1)
+        - bev_t_cam
+    )
+
+    # BEV faces east in the map frame by default, so we rotate the coords by 90deg
+    bev_ij_pts = (
+        Transform2D.from_degrees(torch.tensor([-90]), torch.zeros(2)) @ bev_ij_pts
+    )
+
+    return bev_ij_pts.view(h, w, 2)
 
 def neural_cutout(
-    bev_ij_pts: torch.Tensor,  # I,J,2
+    f_bev: torch.Tensor,  # I,J,2
     f_map: torch.Tensor,  # B,C,H,W
     map_T_cam: Transform2D,  # B
     padding_mode: str = "border",
     mode: str = "bilinear",
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """Cuts out a posed BEV from the Neural Map f_map."""
+
+    bev_ij_pts = build_query_grid(f_bev)
 
     batch_size = map_T_cam.shape[0]
     bev_ij_pts_posed = map_T_cam @ bev_ij_pts.view(-1, 2).to(map_T_cam._data)

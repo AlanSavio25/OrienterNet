@@ -6,6 +6,7 @@ from torch.nn.functional import normalize
 
 from maploc.models.bev_mapper import BEVMapper
 from maploc.utils.wrappers import Transform2D
+from maploc.utils.neural_cutout import neural_cutout
 from maploc.utils.grids import grid_refinement_orienternet_batched
 from . import get_model
 from .base import BaseModel
@@ -144,6 +145,19 @@ class OrienterNet(BaseModel):
             f_bev, valid_bev, confidence_bev = [
                 pred[k]["bev"][key] for key in ["output", "valid_bev", "confidence"]
             ]
+
+            if self.conf.use_map_cutout:  # for evaluating matchers
+                f_bev, valid_cutout = neural_cutout( # hacky - remove for final version.
+                    f_bev, f_map, data["map_T_cam"][k]
+                )
+                pred[k]["bev"]["output"] = f_bev
+                valid_bev = valid_bev & valid_cutout
+                pred[k]["bev"]["valid_bev"] = valid_bev
+                # if confidence_bev is not None:
+                #     confidence_bev = pred_bev["confidence"] = (
+                #         torch.ones_like(confidence_bev) * valid_bev
+                #     )  # / valid_bev.sum((-1, -2))
+                # pred["bev"]["output"] = f_bev
 
             all_valid_mask = {k: torch.ones((f_map[:, 0, ...].shape)).to(valid_bev)}
             map_mask = data.get("map_mask", all_valid_mask)[k]
