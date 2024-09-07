@@ -413,7 +413,7 @@ def evaluate_single_image(
     callback: Optional[Callable] = None,
     progress: bool = True,
     mask_index: Optional[Tuple[int]] = None,
-    has_gps: bool = False,
+    has_gps: bool = True,
     **kwargs,
 ):
     ppm = model.model.conf.pixel_per_meter
@@ -458,12 +458,22 @@ def evaluate_single_image(
                 }
             )
 
-    metrics = MetricCollection(metrics)
     # metrics["directional_error"] = LateralLongitudinalError()
     if has_gps:
-        metrics["xy_gps_error"] = Location2DError("tile_t_gps")
-        metrics["xy_fused_error"] = Location2DError("tile_T_fused")
-        metrics["yaw_fused_error"] = AngleError("tile_T_fused")
+        scale_choice_idx = 0
+        scale_choice = list(model.model.conf.bev_mapper.z_max)[scale_choice_idx]
+        for val_str, val_float in values:
+            metrics.update(
+                {
+                    f"xy_gps_recall_{val_str}m": Location2DRecall(
+                        val_float, "tile_t_gps", scale_choice
+                    ),
+                }
+            )
+        metrics["xy_gps_error"] = Location2DError("tile_t_gps", scale_choice)
+        # metrics["xy_fused_error"] = Location2DError("tile_T_fused")
+        # metrics["yaw_fused_error"] = AngleError("tile_T_fused")
+    metrics = MetricCollection(metrics)
     metrics = metrics.to(model.device)
 
     names = []
@@ -483,29 +493,29 @@ def evaluate_single_image(
         pred = model(batch)
 
         if has_gps:
-            map_t_gps = pred["map_t_gps"] = batch["map_t_gps"]
-            pred["log_probs_fused"] = fuse_gps(
-                pred["log_probs"],
-                map_t_gps,
-                ppm,
-                sigma=batch["accuracy_gps"],
-                gaussian=True,
-                refactored=True,
-            )  # memory_layout
+            map_t_gps = batch["map_t_gps"][scale_choice]
+            # pred["log_probs_fused"] = fuse_gps(
+            #     pred["log_probs"],
+            #     map_t_gps,
+            #     ppm,
+            #     sigma=batch["accuracy_gps"],
+            #     gaussian=True,
+            #     refactored=True,
+            # )  # memory_layout
 
             # argmax_xyr returns the "uv" coordinates on the memory layout
-            uvt_fused = argmax_xyr(pred["log_probs_fused"])
+            # uvt_fused = argmax_xyr(pred["log_probs_fused"])
 
             # Note: the rotation dimension (last dim) of log_probs_fused is
             # still ordered acc. to north-clockwise yaw convention.
 
-            ij_fused = torch.flip(uvt_fused[..., :2], dims=[-1])
-            yaw_fused = 90 - uvt_fused[..., -1]
-            map_T_fused = Transform2D.from_degrees(yaw_fused.unsqueeze(-1), ij_fused)
-            pred["tile_T_fused"] = Transform2D.from_pixels(map_T_fused, 1 / ppm)
+            # ij_fused = torch.flip(uvt_fused[..., :2], dims=[-1])
+            # yaw_fused = 90 - uvt_fused[..., -1]
+            # map_T_fused = Transform2D.from_degrees(yaw_fused.unsqueeze(-1), ij_fused)
+            # pred["tile_T_fused"] = Transform2D.from_pixels(map_T_fused, 1 / ppm)
 
-            pred["tile_t_gps"] = Transform2D.from_pixels(map_t_gps, 1 / ppm)
-            del ij_fused, uvt_fused, yaw_fused
+            pred[scale_choice].update({"tile_t_gps": Transform2D.from_pixels(map_t_gps, 1 / ppm[scale_choice_idx])})
+            # del ij_fused, uvt_fused, yaw_fused
         names += batch["name"]
 
         # if model.model.conf.bev_mapper.multiscale:
