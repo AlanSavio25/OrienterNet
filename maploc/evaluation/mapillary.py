@@ -128,6 +128,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--chain_weights", nargs="+", type=str, default=['1', '1', '1']
     )
+    parser.add_argument("--fig_for_paper", action="store_true")
     parser.add_argument("dotlist", nargs="*")
     args = parser.parse_args()
 
@@ -147,4 +148,5 @@ if __name__ == "__main__":
         chain=args.chain,
         chain_weights=chain_weights,
         singlemodel_randomscale=args.singlemodel_randomscale,
+        viz_kwargs=dict(fig_for_paper=args.fig_for_paper)
     )

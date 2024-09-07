@@ -71,7 +71,8 @@ def plot_example_single(
 
         if k == "chain":
             tile_t_gps = data["tile_t_gps"][32.0].squeeze(0)
-            pred[k]["scores_unmasked"] = pred[32.0]["scores_unmasked"]
+            if "scores_unmasked" in pred[k]:
+                pred[k]["scores_unmasked"] = pred[32.0]["scores_unmasked"]
         else:
             tile_t_gps = data["tile_t_gps"][k].squeeze(0)
 
@@ -175,6 +176,7 @@ def plot_example_single(
             dpi=75,
             cmaps="jet",
         )
+
         fig = plt.gcf()
         axes = fig.axes
         for map_idx in range(len(maps_viz)):
@@ -325,27 +327,39 @@ def plot_example_single(
 
         if fig_for_paper:
             # !cp ../datasets/MGL/{scene}/images/{name}.jpg {out_dir}/{scene}_{name}.jpg
-            plot_images([map_viz])
-            plt.gca().images[0].set_interpolation("none")
-            plot_nodes(0, rasters[2])
-            plot_pose([0], m_t_c_gt, yaw_gt, c="red")
-            plot_pose([0], m_t_c_pred, yaw_p, c="k")
-            save_plot(p.format("map"))
+            # plot_images([map_viz])
+            # plt.gca().images[0].set_interpolation("none")
+            # plot_nodes(0, rasters[2])
+            # plot_pose([0], m_t_c_gt, yaw_gt, c="red")
+            # plot_pose([0], m_t_c_pred, yaw_p, c="k")
+            # save_plot(p.format("map"))
+            # plt.close()
+            # plot_images([lp_ij], cmaps="jet")
+            # plot_dense_rotations(0, lp_ijt.exp())
+            # save_plot(p.format("loglikelihood"), dpi=100)
+            # plt.close()
+            # plot_images([overlay])
+            # plt.gca().images[0].set_interpolation("none")
+            # axins = add_circle_inset(plt.gca(), inset_center)
+            # axins.scatter(*m_t_c_gt, lw=1, c="red", ec="k", s=50)
+            # save_plot(p.format("likelihood"))
+            # plt.close()
+            # write_torch_image(
+            #     p.format("neuralmap").replace("pdf", "jpg"), feats_map_rgb
+            # )
+            # write_torch_image(p.format("image").replace("pdf", "jpg"), image.numpy())
+            #
+            # neural cutout
+            plot_images([bev, feats_map_rgb], origins=["lower", "lower"])
+            plot_pose(
+                        [1],
+                        m_t_c_gt,
+                        yaw_gt,
+                        c="black",
+                        refactored=True,
+                    )
+            save_plot(p.format("PAPER_pred"))
             plt.close()
-            plot_images([lp_ij], cmaps="jet")
-            plot_dense_rotations(0, lp_ijt.exp())
-            save_plot(p.format("loglikelihood"), dpi=100)
-            plt.close()
-            plot_images([overlay])
-            plt.gca().images[0].set_interpolation("none")
-            axins = add_circle_inset(plt.gca(), inset_center)
-            axins.scatter(*m_t_c_gt, lw=1, c="red", ec="k", s=50)
-            save_plot(p.format("likelihood"))
-            plt.close()
-            write_torch_image(
-                p.format("neuralmap").replace("pdf", "jpg"), feats_map_rgb
-            )
-            write_torch_image(p.format("image").replace("pdf", "jpg"), image.numpy())
 
         scales_scores = pred[k]["pixel_scales"]  # [..., 2:-7]
         z_max = k
