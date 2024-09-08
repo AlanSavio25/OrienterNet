@@ -15,6 +15,7 @@ from .bev_net import BEVNet
 from .bev_projection import CartesianProjection, PolarProjectionDepth
 from .voting import TemplateSampler
 
+from torch.profiler import ProfilerActivity, profile, record_function
 
 @functools.partial(torch.vmap, in_dims=(0, 0, 0))
 def project_points_to_view(
@@ -294,44 +295,80 @@ class BEVMapper(BaseModel):
 
         if self.conf.mode == "forward":
 
-            pred["pixel_scales"] = scales = self.scale_classifier(
-                f_image.moveaxis(1, -1)
-            )  # if snap, then this should be an mlp
+            for i, k in enumerate(self.conf.z_max):
 
-            # Map image columns to polar ray features
-            f_polar = self.projection_polar(f_image, scales, camera)
+                if f_image.shape[-3] == self.conf.latent_dim:
+                    start = 0
+                    end = self.conf.latent_dim
+                else:
+                    start = i * self.conf.latent_dim
+                    end = (i + 1) * self.conf.latent_dim
 
-            # Polar to cartesian
-            with torch.autocast("cuda", enabled=False):
-                f_bev, valid_bev, _ = self.projection_bev(
-                    f_polar.float(), None, camera.float()
+                pred[k]["pixel_scales"] = scales = self.scale_classifier[i](
+                    f_image[:, start:end, ...].moveaxis(-3, -1)
                 )
 
-            pred_bev = {}
+                measurement = "polar_projection"
+                torch.cuda.reset_peak_memory_stats()
+                with profile(
+                    activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+                    profile_memory=True,
+                ) as prof:
+                    with record_function(measurement):
+                        # Map image columns to polar ray features
+                        f_polar = self.projection_polar[i](f_image, scales, camera)
+                cuda_time = prof.key_averages()[0].cuda_time / 1000
+                stats = torch.cuda.memory_stats()
+                peak_bytes = stats["allocated_bytes.all.peak"] / 1024**3
+                print(f"[{measurement}]: {cuda_time:.3f} ms")
+                print(f"[{measurement}]: {peak_bytes:.2f} GB")
 
-            # Cartesian features through BEV Net -> f_bev+confidence
-            if self.conf.bev_net is None:
-                # channel last -> classifier -> channel first
-                f_bev = self.feature_projection(f_bev.moveaxis(1, -1)).moveaxis(-1, 1)
-                pred["bev"] = {"output": f_bev}
-            else:
-                pred_bev = pred["bev"] = self.bev_net[i](
-                    {"input": f_bev}
-                )  # SNAP: This can probably be reused for the SNAP implementation
-                f_bev = pred_bev["output"]
+                measurement = "cartesian_projection"
+                torch.cuda.reset_peak_memory_stats()
+                with profile(
+                    activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+                    profile_memory=True,
+                ) as prof:
+                    with record_function(measurement):
+                        # Polar to cartesian
+                        with torch.autocast("cuda", enabled=False):
+                            f_bev, valid_bev, _ = self.projection_bev[i](
+                                f_polar.float(), None, camera.float()
+                            )
+                cuda_time = prof.key_averages()[0].cuda_time / 1000
+                stats = torch.cuda.memory_stats()
+                peak_bytes = stats["allocated_bytes.all.peak"] / 1024**3
+                print(f"[{measurement}]: {cuda_time:.3f} ms")
+                print(f"[{measurement}]: {peak_bytes:.2f} GB")
 
-            # Refactoring: convert bev to memory layout
-            f_bev = pred["bev"]["output"] = torch.rot90(
-                f_bev, -1, dims=(-2, -1)
-            )  # B, C, I, J
-            confidence_bev = pred_bev.get("confidence")  # B, I, J
-            if confidence_bev is not None:
-                confidence_bev = pred["bev"]["confidence"] = torch.rot90(
-                    confidence_bev, -1, dims=(-2, -1)
-                )
-            valid_bev = pred["bev"]["valid_bev"] = torch.rot90(
-                valid_bev, -1, dims=(-2, -1)
-            )  # B, I, J
+
+
+                # Cartesian features through BEV Net -> f_bev+confidence
+                if self.conf.bev_net is None:
+                    # channel last -> classifier -> channel first
+                    f_bev = self.feature_projection(f_bev.moveaxis(1, -1)).moveaxis(-1, 1)
+                    pred[k]["bev"] = {"output": f_bev}
+                else:
+                    pred[k]["bev"] = self.bev_net[i](
+                        {"input": f_bev}
+                    )  # SNAP: This can probably be reused for the SNAP implementation
+                    f_bev = pred[k]["bev"]["output"]
+
+                # Refactoring: convert bev to memory layout
+                f_bev = pred[k]["bev"]["output"] = torch.rot90(
+                    f_bev, -1, dims=(-2, -1)
+                )  # B, C, I, J
+                confidence_bev = pred[k]["bev"].get("confidence")  # B, I, J
+                if confidence_bev is not None:
+                    confidence_bev = pred[k]["bev"]["confidence"] = torch.rot90(
+                        confidence_bev, -1, dims=(-2, -1)
+                    )
+                valid_bev = pred[k]["bev"]["valid_bev"] = torch.rot90(
+                    valid_bev, -1, dims=(-2, -1)
+                )  # B, I, J
+
+                pred[k]["bev"]["valid_bev"] = valid_bev
+            pred["features_image"] = f_image
 
         elif self.conf.mode == "inverse":  # SNAP's BEV
 
@@ -357,35 +394,62 @@ class BEVMapper(BaseModel):
                     f_image[:, start:end, ...].moveaxis(-3, -1)
                 )  # if snap, then this should be an mlp
 
-                xy = self.cam_xy_pts[i]
-                if len(xy.shape) != 4:
-                    xy = xy[None].repeat_interleave(tile_T_cam[k].shape[0], dim=0)
 
-                z_offset = -torch.tensor(4)  # Set the camera at height = 4m
+                measurement = "buildxyz_grid"
+                torch.cuda.reset_peak_memory_stats()
+                with profile(
+                    activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+                    profile_memory=True,
+                ) as prof:
+                    with record_function(measurement):
+                        xy = self.cam_xy_pts[i]
+                        if len(xy.shape) != 4:
+                            xy = xy[None].repeat_interleave(tile_T_cam[k].shape[0], dim=0)
 
-                # Add noise to camera height
-                if self.conf.grid_z_offset_range is not None:
-                    z_min, z_max = self.conf.grid_z_offset_range  # -2, +2
-                    z_offset = z_offset + (
-                        torch.rand(1).squeeze() * (z_max - z_min) + z_min
-                    )
+                        z_offset = -torch.tensor(4)  # Set the camera at height = 4m
 
-                # 2D Grid -> 3D Grid
-                grid_height = self.conf.grid_height
-                z_delta = 0.5
-                z = torch.arange(0, grid_height, z_delta) + z_offset + z_delta / 2
-                xy, z = torch.broadcast_tensors(
-                    xy[:, :, :, None, :], z[None, None, None, :, None]
-                )
-                xyz = torch.cat([xy, z[..., :1]], dim=-1).to(camera.device)
+                        # Add noise to camera height
+                        if self.conf.grid_z_offset_range is not None:
+                            z_min, z_max = self.conf.grid_z_offset_range  # -2, +2
+                            z_offset = z_offset + (
+                                torch.rand(1).squeeze() * (z_max - z_min) + z_min
+                            )
 
-                grid_shape = xyz.shape[:-1]
-                xyz_flat = xyz.reshape(len(xyz), -1, 3)  # B, N=129x64x24, 3
+                        # 2D Grid -> 3D Grid
+                        grid_height = self.conf.grid_height
+                        z_delta = 0.5
+                        z = torch.arange(0, grid_height, z_delta) + z_offset + z_delta / 2
+                        xy, z = torch.broadcast_tensors(
+                            xy[:, :, :, None, :], z[None, None, None, :, None]
+                        )
+                        xyz = torch.cat([xy, z[..., :1]], dim=-1).to(camera.device)
 
-                # Compute the locations of 2D observations in camera view for all points
-                p2d_view, visible, depth, _ = project_points_to_view(
-                    cam_R_gcam, camera._data, xyz_flat
-                )
+                        grid_shape = xyz.shape[:-1]
+                        xyz_flat = xyz.reshape(len(xyz), -1, 3)  # B, N=129x64x24, 3
+                cuda_time = prof.key_averages()[0].cuda_time / 1000
+                stats = torch.cuda.memory_stats()
+                peak_bytes = stats["allocated_bytes.all.peak"] / 1024**3
+                print(f"[{measurement}]: {cuda_time:.3f} ms")
+                print(f"[{measurement}]: {peak_bytes:.2f} GB")
+                
+
+                measurement = "projection"
+                torch.cuda.reset_peak_memory_stats()
+                with profile(
+                    activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+                    profile_memory=True,
+                ) as prof:
+                    with record_function(measurement):
+                        # Compute the locations of 2D observations in camera view for all points
+                        p2d_view, visible, depth, _ = project_points_to_view(
+                            cam_R_gcam, camera._data, xyz_flat
+                        )
+                cuda_time = prof.key_averages()[0].cuda_time / 1000
+                stats = torch.cuda.memory_stats()
+                peak_bytes = stats["allocated_bytes.all.peak"] / 1024**3
+                print(f"[{measurement}]: {cuda_time:.3f} ms")
+                print(f"[{measurement}]: {peak_bytes:.2f} GB")
+                
 
                 # Plot projected points on image
                 # image = torch.nn.functional.interpolate(data['image'],scale_factor=0.5,mode='bilinear')[0].permute(1, 2, 0).cpu().numpy()
@@ -396,35 +460,71 @@ class BEVMapper(BaseModel):
                 # plt.axis('off')
                 # plt.savefig('image_with_visible_points.png')
 
-                # Interpolate image feat and scale score at projected points
-                f_proj = interpolate_features(
-                    torch.cat(
-                        [
-                            f_image[:, start:end, ...],
-                            scales.moveaxis(-1, -3),
-                        ],
-                        1,
-                    ),
-                    p2d_view,
-                )
+                measurement = "interpolate_image_Features"
+                torch.cuda.reset_peak_memory_stats()
+                with profile(
+                    activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+                    profile_memory=True,
+                ) as prof:
+                    with record_function(measurement):
+                        # Interpolate image feat and scale score at projected points
+                        f_proj = interpolate_features(
+                            torch.cat(
+                                [
+                                    f_image[:, start:end, ...],
+                                    scales.moveaxis(-1, -3),
+                                ],
+                                1,
+                            ),
+                            p2d_view,
+                        )
+                cuda_time = prof.key_averages()[0].cuda_time / 1000
+                stats = torch.cuda.memory_stats()
+                peak_bytes = stats["allocated_bytes.all.peak"] / 1024**3
+                print(f"[{measurement}]: {cuda_time:.3f} ms")
+                print(f"[{measurement}]: {peak_bytes:.2f} GB")
                 f_proj = f_proj.moveaxis(-1, -2)
                 f_proj, scores_scales = f_proj.split(self.conf.latent_dim, dim=-1)
 
                 # d_min_max = torch.tensor([self.conf.z_min, self.conf.z_max]).to(scores_scales)
                 # scores_proj = interpolate_depth_scores(scores_scales, depth, d_min_max).moveaxis(1,0)
                 s_min_max = torch.tensor(self.conf.scale_range).to(scores_scales)
-                scores_proj = interpolate_scale_scores(
-                    scores_scales, depth, s_min_max, data["camera"]._data
-                ).moveaxis(1, 0)
+                measurement = "interpolate_scale_scores"
+                torch.cuda.reset_peak_memory_stats()
+                with profile(
+                    activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+                    profile_memory=True,
+                ) as prof:
+                    with record_function(measurement):
+                        scores_proj = interpolate_scale_scores(
+                            scores_scales, depth, s_min_max, data["camera"]._data
+                        ).moveaxis(1, 0)
+                cuda_time = prof.key_averages()[0].cuda_time / 1000
+                stats = torch.cuda.memory_stats()
+                peak_bytes = stats["allocated_bytes.all.peak"] / 1024**3
+                print(f"[{measurement}]: {cuda_time:.3f} ms")
+                print(f"[{measurement}]: {peak_bytes:.2f} GB")
                 scores_proj = scores_proj.moveaxis(-1, -2)
 
                 grid_shape = (-1, *xyz.shape[-4:-1])
 
                 if self.conf.feature_depth_fusion == "mlp":  # like snap
-                    # as in SNAP: X = MLP([f_proj, score]). Then, vertical pool to get M = max X
-                    f_grid = self.fusion_mlp[i](
-                        torch.cat([f_proj, scores_proj[..., None]], dim=-1)
-                    )
+                    measurement = "fusion_mlp"
+                    torch.cuda.reset_peak_memory_stats()
+                    with profile(
+                        activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+                        profile_memory=True,
+                    ) as prof:
+                        with record_function(measurement):
+                            # as in SNAP: X = MLP([f_proj, score]). Then, vertical pool to get M = max X
+                            f_grid = self.fusion_mlp[i](
+                                torch.cat([f_proj, scores_proj[..., None]], dim=-1)
+                            )
+                    cuda_time = prof.key_averages()[0].cuda_time / 1000
+                    stats = torch.cuda.memory_stats()
+                    peak_bytes = stats["allocated_bytes.all.peak"] / 1024**3
+                    print(f"[{measurement}]: {cuda_time:.3f} ms")
+                    print(f"[{measurement}]: {peak_bytes:.2f} GB")
                 elif self.conf.feature_depth_fusion == "softmax":  # like orienternet
                     scores_proj = scores_proj.reshape(*grid_shape, 1)
                     vertical_softmax = torch.nn.Softmax(dim=-2)(scores_proj).reshape(
@@ -439,8 +539,20 @@ class BEVMapper(BaseModel):
                 f_grid = f_grid.reshape(*grid_shape, f_grid.shape[-1])
                 valid = visible.reshape(grid_shape)
 
-                bev = self.vertical_pooling({"features": f_grid, "valid": valid})
-                f_bev, valid_bev = bev["features"], bev["valid"]
+                measurement = "vertical_pooling"
+                torch.cuda.reset_peak_memory_stats()
+                with profile(
+                    activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+                    profile_memory=True,
+                ) as prof:
+                    with record_function(measurement):
+                        bev = self.vertical_pooling({"features": f_grid, "valid": valid})
+                        f_bev, valid_bev = bev["features"], bev["valid"]
+                cuda_time = prof.key_averages()[0].cuda_time / 1000
+                stats = torch.cuda.memory_stats()
+                peak_bytes = stats["allocated_bytes.all.peak"] / 1024**3
+                print(f"[{measurement}]: {cuda_time:.3f} ms")
+                print(f"[{measurement}]: {peak_bytes:.2f} GB")
 
                 # Enforce a BEV shape of [129,64], regardless of grid resolution.
                 # This allows us to generate a finer larger BEV and then downsample for memory efficiency
