@@ -338,44 +338,46 @@ class BEVMapper(BaseModel):
 
         if self.conf.mode == "forward":
 
-            pred["pixel_scales"] = scales = self.scale_classifier(
-                f_image.moveaxis(1, -1)
-            )  # if snap, then this should be an mlp
+            for i, k in enumerate(self.conf.z_max):
+                pred[k]["pixel_scales"] = scales = self.scale_classifier[i](
+                    f_image.moveaxis(1, -1)
+                )  # if snap, then this should be an mlp
 
-            # Map image columns to polar ray features
-            f_polar = self.projection_polar(f_image, scales, camera)
+                # Map image columns to polar ray features
+                f_polar = self.projection_polar[i](f_image, scales, camera)
 
-            # Polar to cartesian
-            with torch.autocast("cuda", enabled=False):
-                f_bev, valid_bev, _ = self.projection_bev(
-                    f_polar.float(), None, camera.float()
-                )
+                # Polar to cartesian
+                with torch.autocast("cuda", enabled=False):
+                    f_bev, valid_bev, _ = self.projection_bev[i](
+                        f_polar.float(), None, camera.float()
+                    )
 
-            pred_bev = {}
+                pred_bev = {}
 
-            # Cartesian features through BEV Net -> f_bev+confidence
-            if self.conf.bev_net is None:
-                # channel last -> classifier -> channel first
-                f_bev = self.feature_projection(f_bev.moveaxis(1, -1)).moveaxis(-1, 1)
-                pred["bev"] = {"output": f_bev}
-            else:
-                pred_bev = pred["bev"] = self.bev_net[i](
-                    {"input": f_bev}
-                )  # SNAP: This can probably be reused for the SNAP implementation
-                f_bev = pred_bev["output"]
+                # Cartesian features through BEV Net -> f_bev+confidence
+                if self.conf.bev_net is None:
+                    # channel last -> classifier -> channel first
+                    f_bev = self.feature_projection(f_bev.moveaxis(1, -1)).moveaxis(-1, 1)
+                    pred[k]["bev"] = {"output": f_bev}
+                else:
+                    pred_bev = pred[k]["bev"] = self.bev_net[i](
+                        {"input": f_bev}
+                    )  # SNAP: This can probably be reused for the SNAP implementation
+                    f_bev = pred_bev["output"]
 
-            # Refactoring: convert bev to memory layout
-            f_bev = pred["bev"]["output"] = torch.rot90(
-                f_bev, -1, dims=(-2, -1)
-            )  # B, C, I, J
-            confidence_bev = pred_bev.get("confidence")  # B, I, J
-            if confidence_bev is not None:
-                confidence_bev = pred["bev"]["confidence"] = torch.rot90(
-                    confidence_bev, -1, dims=(-2, -1)
-                )
-            valid_bev = pred["bev"]["valid_bev"] = torch.rot90(
-                valid_bev, -1, dims=(-2, -1)
-            )  # B, I, J
+                # Refactoring: convert bev to memory layout
+                f_bev = pred[k]["bev"]["output"] = torch.rot90(
+                    f_bev, -1, dims=(-2, -1)
+                )  # B, C, I, J
+                confidence_bev = pred_bev.get("confidence")  # B, I, J
+                if confidence_bev is not None:
+                    confidence_bev = pred[k]["bev"]["confidence"] = torch.rot90(
+                        confidence_bev, -1, dims=(-2, -1)
+                    )
+                valid_bev = pred[k]["bev"]["valid_bev"] = torch.rot90(
+                    valid_bev, -1, dims=(-2, -1)
+                )  # B, I, J
+            pred["features_image"] = f_image
 
         elif self.conf.mode == "inverse":  # SNAP's BEV
 
