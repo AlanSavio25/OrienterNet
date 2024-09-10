@@ -135,7 +135,11 @@ def plot_example_single(
             maps_titles.append("semantic map")
             maps_viz.append(map_viz)
         if "aerial_map" in data:
-            aerial_map = data["aerial_map"][k].permute(1, 2, 0)  #  / 255.0
+            if k == "chain":
+                aerial_map = data["aerial_map"][32.0]
+            else:
+                aerial_map = data["aerial_map"][k]
+            aerial_map = aerial_map.permute(1, 2, 0)  #  / 255.0
             maps_titles.append("aerial map")
             maps_viz.append(aerial_map.numpy())
 
@@ -194,8 +198,17 @@ def plot_example_single(
             # currently, the chain is in the smallest depth's resolution (finest).
             if k == "chain":
                 (bev,) = features_to_RGB(
-                    pred[32.0]["features_bev"].numpy(),
-                    masks=[pred[32.0]["valid_bev"].numpy()],
+                    pred[128.0]["features_bev"].numpy(),
+                    masks=[pred[128.0]["valid_bev"].numpy()],
+                )
+                bev = (
+                    torch.nn.functional.interpolate(
+                        torch.from_numpy(bev).moveaxis(-1, -3).unsqueeze(1),
+                        scale_factor=4,
+                    )
+                    .squeeze(1)
+                    .moveaxis(-3, -1)
+                    .numpy()
                 )
             else:
                 (bev,) = features_to_RGB(
@@ -352,12 +365,12 @@ def plot_example_single(
             # neural cutout
             plot_images([bev, feats_map_rgb], origins=["lower", "lower"])
             plot_pose(
-                        [1],
-                        m_t_c_gt,
-                        yaw_gt,
-                        c="black",
-                        refactored=True,
-                    )
+                [1],
+                m_t_c_gt,
+                yaw_gt,
+                c="black",
+                refactored=True,
+            )
             save_plot(p.format("PAPER_pred"))
             plt.close()
 
