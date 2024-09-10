@@ -468,11 +468,17 @@ def evaluate_single_image(
                     f"xy_gps_recall_{val_str}m": Location2DRecall(
                         val_float, "tile_t_gps", scale_choice
                     ),
+                    f"xy_gps_fused_recall_{val_str}m": Location2DRecall(
+                        val_float, "tile_T_fused", scale_choice
+                    ),
+                    f"yaw_gps_fused_recall_{val_str}°": AngleRecall(
+                        val_float, "tile_T_fused", scale_choice
+                    ),
                 }
             )
         metrics["xy_gps_error"] = Location2DError("tile_t_gps", scale_choice)
-        # metrics["xy_fused_error"] = Location2DError("tile_T_fused")
-        # metrics["yaw_fused_error"] = AngleError("tile_T_fused")
+        metrics["xy_gps_fused_error"] = Location2DError("tile_T_fused", scale_choice)
+        metrics["yaw_gps_fused_error"] = AngleError("tile_T_fused", scale_choice)
     metrics = MetricCollection(metrics)
     metrics = metrics.to(model.device)
 
@@ -492,30 +498,6 @@ def evaluate_single_image(
             batch["map"][0, mask_index[0]][mask] = 0
         pred = model(batch)
 
-        if has_gps:
-            map_t_gps = batch["map_t_gps"][scale_choice]
-            # pred["log_probs_fused"] = fuse_gps(
-            #     pred["log_probs"],
-            #     map_t_gps,
-            #     ppm,
-            #     sigma=batch["accuracy_gps"],
-            #     gaussian=True,
-            #     refactored=True,
-            # )  # memory_layout
-
-            # argmax_xyr returns the "uv" coordinates on the memory layout
-            # uvt_fused = argmax_xyr(pred["log_probs_fused"])
-
-            # Note: the rotation dimension (last dim) of log_probs_fused is
-            # still ordered acc. to north-clockwise yaw convention.
-
-            # ij_fused = torch.flip(uvt_fused[..., :2], dims=[-1])
-            # yaw_fused = 90 - uvt_fused[..., -1]
-            # map_T_fused = Transform2D.from_degrees(yaw_fused.unsqueeze(-1), ij_fused)
-            # pred["tile_T_fused"] = Transform2D.from_pixels(map_T_fused, 1 / ppm)
-
-            pred[scale_choice].update({"tile_t_gps": Transform2D.from_pixels(map_t_gps, 1 / ppm[scale_choice_idx])})
-            # del ij_fused, uvt_fused, yaw_fused
         names += batch["name"]
 
         # if model.model.conf.bev_mapper.multiscale:
@@ -576,6 +558,29 @@ def evaluate_single_image(
         # for now, we skip visualization, and just focus on the numbers
         # if "tile_t_gps" in batch:
         # batch["tile_t_gps"]["chain"] = batch["tile_t_gps"][32.0]
+
+        if has_gps:
+            # Evaluate either on a single map (each z_max maps to a different map)
+            map_t_gps = batch["map_t_gps"][scale_choice]
+            pred[scale_choice]["log_probs_fused"] = fuse_gps(
+                pred["chain"]["log_probs"],
+                map_t_gps,
+                ppm[scale_choice_idx],
+                sigma=batch["accuracy_gps"][scale_choice],
+                gaussian=True,
+                refactored=True,
+            )  # memory_layout
+            # TODO: refactor code for scale_choice_idx and upsample ppm to be same
+            uvr_gps_max = argmax_xyr(pred[scale_choice]["log_probs_fused"])
+            ij_gps_max = torch.flip(uvr_gps_max[..., :2], dims=[-1])
+            yaw_gps_max = 180 - uvr_gps_max[..., -1]
+            map_T_gps = Transform2D.from_degrees(yaw_gps_max.unsqueeze(-1), ij_gps_max)
+            pred[scale_choice]["tile_T_fused"] = tile_T_gps_fused_max = (
+                Transform2D.from_pixels(map_T_gps, 1 / ppm[scale_choice_idx])
+            )
+            pred[scale_choice]["tile_t_gps"] = Transform2D.from_pixels(
+                map_t_gps, 1 / ppm[scale_choice_idx]
+            )
 
         if model.model.conf.grid_refinement:
             delta_p = 0.5  # m
@@ -789,7 +794,7 @@ def select_images_from_log(log_paths):
             log_data = read_json(Path(log_path))
             if not log_data:
                 raise ValueError("Log data is empty")
-            if i >= 1: # todo: remove this
+            if i >= 1:  # todo: remove this
                 sorted_names = sorted(log_data["names"])
             # logs[i] = list(
             #     zip(
@@ -799,13 +804,20 @@ def select_images_from_log(log_paths):
             #         log_data["names"],
             #     )
             # )
-            if i == 0:
+            # if i == 0:
 
-                # logs[i] = list(zip(log_data["errors"]["xy_max_error"], log_data["names"]))
-                logs[i] = [log_data["errors"]["xy_max_error"]]
-            else:
-                logs[i] = list(zip(log_data['errors']["xy_max_error_32"], log_data["errors"]["xy_max_error_chain"], log_data["names"]))
-                # logs[i] = list(log_data["errors"]["xy_max_error_chain"])
+            #     # logs[i] = list(zip(log_data["errors"]["xy_max_error"], log_data["names"]))
+            #     logs[i] = [log_data["errors"]["xy_max_error"]] # Orienternet
+            # else:
+            logs[i] = list(
+                zip(
+                    log_data["errors"]["xy_max_error_32"],
+                    log_data["errors"]["xy_max_error_128"],
+                    log_data["errors"]["xy_max_error_chain"],
+                    log_data["names"],
+                )
+            )
+            # logs[i] = list(log_data["errors"]["xy_max_error_chain"])
 
             # We must sort
             # logs[i] = [
@@ -836,12 +848,16 @@ def select_images_from_log(log_paths):
             #     multiscale1[2] < 15
             # )
             if (
-                single[0] > 20
+                # single[0] > 20
                 # and single[1] > 15  # 32m
                 # and single[2] > 15  # 128m
-                and
+                # and
                 # multiscale1[0] > 15 and
-                multiscale1[1] < 3
+                # multiscale1[1] < 3
+                multiscale1[2] < 2
+                and single[2] > 15
+                and multiscale1[1] < single[1]
+                and multiscale1[0] < single[0]
             )
         ][
             :25
