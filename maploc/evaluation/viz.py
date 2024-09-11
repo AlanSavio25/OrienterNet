@@ -22,6 +22,8 @@ from ..utils.viz_localization import (
     plot_bev,
 )
 
+from maploc.utils.neural_cutout import neural_cutout
+
 
 def plot_example_single(
     idx,
@@ -287,29 +289,7 @@ def plot_example_single(
             # else:
             #     plt.show()
 
-        if fig_for_paper:
-            # !cp ../datasets/MGL/{scene}/images/{name}.jpg {out_dir}/{scene}_{name}.jpg
-            plot_images([map_viz])
-            plt.gca().images[0].set_interpolation("none")
-            plot_nodes(0, rasters[2])
-            plot_pose([0], m_t_c_gt, yaw_gt, c="red")
-            plot_pose([0], m_t_c_pred, yaw_p, c="k")
-            save_plot(p.format("map"))
-            plt.close()
-            plot_images([lp_ij], cmaps="jet")
-            plot_dense_rotations(0, lp_ijt.exp())
-            save_plot(p.format("loglikelihood"), dpi=100)
-            plt.close()
-            plot_images([overlay])
-            plt.gca().images[0].set_interpolation("none")
-            axins = add_circle_inset(plt.gca(), inset_center)
-            axins.scatter(*m_t_c_gt, lw=1, c="red", ec="k", s=50)
-            save_plot(p.format("likelihood"))
-            plt.close()
-            write_torch_image(
-                p.format("neuralmap").replace("pdf", "jpg"), feats_map_rgb
-            )
-            write_torch_image(p.format("image").replace("pdf", "jpg"), image.numpy())
+        
 
         scales_scores = pred[k]["pixel_scales"]  # [..., 2:-7]
         z_max = k
@@ -414,6 +394,78 @@ def plot_example_single(
             plots.append(to_tensor(plot))
         else:
             plt.show()
+
+        if fig_for_paper:
+            # # !cp ../datasets/MGL/{scene}/images/{name}.jpg {out_dir}/{scene}_{name}.jpg
+            # plot_images([map_viz])
+            # plt.gca().images[0].set_interpolation("none")
+            # plot_nodes(0, rasters[2])
+            # plot_pose([0], m_t_c_gt, yaw_gt, c="red")
+            # plot_pose([0], m_t_c_pred, yaw_p, c="k")
+            # save_plot(p.format("map"))
+            # plt.close()
+            # plot_images([lp_ij], cmaps="jet")
+            # plot_dense_rotations(0, lp_ijt.exp())
+            # save_plot(p.format("loglikelihood"), dpi=100)
+            # plt.close()
+            # plot_images([overlay])
+            # plt.gca().images[0].set_interpolation("none")
+            # axins = add_circle_inset(plt.gca(), inset_center)
+            # axins.scatter(*m_t_c_gt, lw=1, c="red", ec="k", s=50)
+            # save_plot(p.format("likelihood"))
+            # plt.close()
+            # write_torch_image(
+            #     p.format("neuralmap").replace("pdf", "jpg"), feats_map_rgb
+            # )
+            # write_torch_image(p.format("image").replace("pdf", "jpg"), image.numpy())
+
+            # Plot the row of image, bev conf, bev
+            # plot_images(
+            # [image, ],
+            # dpi=100,
+            # cmaps="jet",
+            # )
+            # plot_images(
+            # [image, conf_q, feats_q_rgb],
+            # dpi=125,
+            # cmaps="jet",
+            # )
+
+            # Get map raster cutout.
+
+            f_bev = pred[k]["features_bev"]
+            rasters = data["semantic_map"][k]
+            print(rasters.shape)
+            # f_map = Colormap.apply(rasters)
+            f_map = pred[k]["features_map"]
+            (f_map,) = features_to_RGB(f_map.numpy())
+            print(f_map.shape)
+            # f_map = f_map.permute(2, 0, 1)
+            # print(f_map.shape)
+            map_T_cam = map_T_cam_gt
+
+            map_raster_cutout, _ = neural_cutout( # hacky - remove for final version.
+                    f_bev, torch.from_numpy(f_map).permute(2, 0, 1).unsqueeze(0), map_T_cam
+            )
+            map_raster_cutout = map_raster_cutout.squeeze()
+            map_raster_cutout = map_raster_cutout.masked_fill(~mask_bev, 1.).permute(1,2,0).numpy()
+            map_raster_cutout = np.swapaxes(map_raster_cutout, 0, 1)
+
+            plot_images(
+            [image, map_raster_cutout, conf_q, feats_q_rgb],
+            dpi=125,
+            origins=["upper", "lower", "lower", "lower"],
+            cmaps="jet"
+            )
+            # plot_nodes(1, rasters[2], refactored=True)
+            fig = plt.gcf()
+            axes = fig.axes
+            axes[1].images[0].set_interpolation("none")
+            axes[2].images[0].set_interpolation("none")
+            save_plot(p.format("THESIS"))
+            plt.close()
+
+
 
     return plots
 
