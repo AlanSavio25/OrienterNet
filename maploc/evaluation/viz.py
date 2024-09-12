@@ -49,7 +49,7 @@ def plot_example_single(
     scene, name = data["scene"], data["name"]
 
     keys = list(model.model.conf.bev_mapper.z_max)
-    if "xy_max_error_chain" in results:
+    if "xy_max_error_chain" in results and 32.0 in keys:
         keys += ["chain"]
 
     for index, k in enumerate(keys):
@@ -217,7 +217,7 @@ def plot_example_single(
                 )
             bev = np.swapaxes(bev, 0, 1)
             for map_idx in maps_to_draw_on:
-                plot_bev(bev, uv=m_t_c_pred, yaw=yaw_p, zorder=10, ax=axes[map_idx])
+                plot_bev(bev, uv=m_t_c_pred, yaw=yaw_p, zorder=10, ax=axes[map_idx], only_outline=True)
 
         if show_gps and tile_t_gps is not None:
             m_t_gps = Transform2D.to_pixels(

@@ -6,6 +6,8 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+from matplotlib.patches import Polygon
+import cv2
 
 
 def likelihood_overlay(
@@ -173,7 +175,33 @@ def plot_bev(bev, uv, yaw, ax=None, zorder=10, **kwargs):
     if ax is None:
         ax = plt.gca()
     h, w = bev.shape[:2]
-    tfm = mpl.transforms.Affine2D().translate(-w / 2, 0)
-    tfm = tfm.rotate_deg(yaw - 90).translate(*uv + 0.5)
+
+    xlim = ax.get_xlim()
+    ylim = ax.get_ylim()
+
+    if not kwargs["only_outline"]:
+        tfm = mpl.transforms.Affine2D().translate(-w / 2, 0)
+        tfm = tfm.rotate_deg(yaw - 90).translate(*uv + 0.5)
+        tfm += ax.transData
+        ax.imshow(
+            bev, transform=tfm, alpha=0.80, zorder=zorder, origin="lower", **kwargs
+        )
+
+    tfm = (
+        mpl.transforms.Affine2D()
+        .translate(-w / 2, -h)
+        .rotate_deg(yaw - 270)
+        .translate(*uv + 0.5)
+    )
     tfm += ax.transData
-    ax.imshow(bev, transform=tfm, alpha=0.80, zorder=zorder, origin="lower", **kwargs)
+    ax.plot(
+        [0, w - 1, w / 2, 0],
+        [0, 0, h - 0.5, 0],
+        transform=tfm,
+        c="k",
+        lw=1,
+        zorder=zorder,
+    )
+
+    ax.set_xlim(xlim)
+    ax.set_ylim(ylim)
