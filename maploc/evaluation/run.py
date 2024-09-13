@@ -190,10 +190,14 @@ def evaluate_single_image_chain(
 
         # pred = preds[0]
         pred = {}
+        combined_batch = {}
         for p in preds:
             pred.update(p)
         model = models[0]
         batch = batches[0]
+        for b in batches:
+            combined_batch.update(b)
+
         # batch_ = batches_[0]
 
         # Multiply probability volumes of all branches to "chain" results
@@ -326,11 +330,22 @@ def evaluate_single_image_chain(
         names += batch["name"]
 
         results = metrics(pred, batch)
+        if not (
+            results["xy_max_error_chain"] < 2
+            and results["xy_max_error_chain"]
+            < results["xy_max_error_128"]
+            < 4
+            < results["xy_max_error_64"]
+            < results["xy_max_error_32"]
+        ):
+            continue
+
+        preds[0]["chain"] = pred["chain"]
         if callback is not None:
             callback(
-                i, model, unbatch_to_device(pred), unbatch_to_device(batch), results
+                i, models[0], unbatch_to_device(pred), unbatch_to_device(batch), results
             )
-        del batches, preds, results
+        del batches, preds, results, batch, pred
 
     return metrics.cpu(), names
 
