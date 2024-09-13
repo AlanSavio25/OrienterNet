@@ -6,8 +6,6 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-from matplotlib.patches import Polygon
-import cv2
 
 
 def likelihood_overlay(
@@ -50,6 +48,7 @@ def plot_pose(
     w=0.015,
     dot=True,
     zorder=10,
+    scale=1,
     refactored=False,
 ):
     if yaw is not None:
@@ -58,6 +57,7 @@ def plot_pose(
             uv = np.array([np.sin(yaw), -np.cos(yaw)])
         else:
             uv = np.array([np.cos(yaw), np.sin(yaw)])
+        uv = scale * uv
     xy = np.array(xy) + 0.5
     if not isinstance(axs, list):
         axs = [axs]
