@@ -22,8 +22,6 @@ from ..utils.viz_localization import (
     plot_bev,
 )
 
-from maploc.utils.neural_cutout import neural_cutout
-
 
 def plot_example_single(
     idx,
@@ -50,10 +48,21 @@ def plot_example_single(
 
     scene, name = data["scene"], data["name"]
 
-    for index, k in enumerate(model.model.conf.bev_mapper.z_max):
+    # keys = list(model.model.conf.bev_mapper.z_max)
+    keys = [k for k in pred.keys() if k in [32.0, 64.0, 128.0, 256.0, "chain"]]
+    if "xy_max_error_chain" in results and "chain" not in keys:
+        keys += ["chain"]
+
+    for index, k in enumerate(keys):
 
         tile_T_cam_gt = data["tile_T_cam"][k]
-        bev_ppm = model.model.conf.pixel_per_meter[index]
+        # When chaining, we choose map and bev of the finest resolution, because pred outputs in finest map space.
+        if k == "chain":
+            bev_ppm = list(data["bev_ppm"].values())[
+                0
+            ]  # model.model.conf.pixel_per_meter[0]
+        else:
+            bev_ppm = data["bev_ppm"][k]  # model.model.conf.pixel_per_meter[index]
 
         # map_T_cam_gt = Transform2D.to_pixels(
         #     tile_T_cam_gt, 1 / data["bev_ppm"]
@@ -63,7 +72,12 @@ def plot_example_single(
         m_t_c_gt = map_T_cam_gt.t.squeeze(0)  # ij_gt
         yaw_gt = map_T_cam_gt.angle.squeeze(0)  # m_r_c_gt
 
-        tile_t_gps = data["tile_t_gps"][k].squeeze(0)
+        if k == "chain":
+            tile_t_gps = data["tile_t_gps"][32.0].squeeze(0)
+            if "scores_unmasked" in pred[k]:
+                pred[k]["scores_unmasked"] = pred[32.0]["scores_unmasked"]
+        else:
+            tile_t_gps = data["tile_t_gps"][k].squeeze(0)
 
         if show_fused and "ij_fused" in pred[k]:
             m_t_c_pred = pred[k]["ij_fused"]
@@ -89,14 +103,20 @@ def plot_example_single(
             lp_ij = lp_ij.clip(min=np.percentile(lp_ij, 1))
         prob = lp_ij.exp()
 
-        feats_map = pred[k]["features_map"]
+        if k == "chain":
+            feats_map = pred[32.0]["features_map"]
+        else:
+            feats_map = pred[k]["features_map"]
         (feats_map_rgb,) = features_to_RGB(feats_map.numpy())
 
-        text1 = rf'$\Delta xy$: {results[f"xy_max_error_{str(int(k))}"]:.1f}m'
+        if k == "chain":
+            k_str = k
+        else:
+            k_str = str(int(k))
+        text1 = rf'$\Delta xy$: {results[f"xy_max_error_{k_str}"]:.1f}m'
         if has_rotation:
-            text1 += (
-                rf', $\Delta\theta$: {results[f"yaw_max_error_{str(int(k))}"]:.1f}°'
-            )
+            text1 += rf', $\Delta\theta$: {results[f"yaw_max_error_{k_str}"]:.1f}°'
+
         if show_fused and "xy_fused_error" in results:
             text1 += rf', $\Delta xy_{{fused}}$: {results["xy_fused_error"]:.1f}m'
             text1 += rf', $\Delta\theta_{{fused}}$: {results["yaw_fused_error"]:.1f}°'
@@ -109,12 +129,20 @@ def plot_example_single(
         maps_viz = []
         maps_titles = []
         if "semantic_map" in data:
-            rasters = data["semantic_map"][k]
+            if k == "chain":
+                rasters = data["semantic_map"][32.0]
+            else:
+                rasters = data["semantic_map"][k]
+
             map_viz = Colormap.apply(rasters)
             maps_titles.append("semantic map")
             maps_viz.append(map_viz)
         if "aerial_map" in data:
-            aerial_map = data["aerial_map"].permute(1, 2, 0) / 255.0
+            if k == "chain":
+                aerial_map = data["aerial_map"][32.0]
+            else:
+                aerial_map = data["aerial_map"][k]
+            aerial_map = aerial_map.permute(1, 2, 0)  #  / 255.0
             maps_titles.append("aerial map")
             maps_viz.append(aerial_map.numpy())
 
@@ -155,52 +183,79 @@ def plot_example_single(
             dpi=75,
             cmaps="jet",
         )
+
         fig = plt.gcf()
         axes = fig.axes
-        axes[1].images[0].set_interpolation("none")
-        axes[2].images[0].set_interpolation("none")
+        for map_idx in range(len(maps_viz)):
+            axes[map_idx].images[0].set_interpolation("none")
+
         Colormap.add_colorbar()
 
-        # if "semantic_map" in pred:
-        #     plot_nodes(1, rasters[2], refactored=True)
+        if (
+            "semantic_map" in pred[k]
+            and k == 32.0
+            and pred[k]["semantic_map"]["map_features"][0].shape[-1] <= 256
+        ):
+            # On large maps, node labels overlap and can be unreadable
+            plot_nodes(1, rasters[2], refactored=True)
 
+        maps_to_draw_on = [x + 1 for x in list(range(len(maps_viz)))]
         if overlay_bev:
-            (bev,) = features_to_RGB(
-                pred[k]["features_bev"].numpy(),
-                masks=[pred[k]["valid_bev"].numpy()],
-            )
+            # TODO: when chaining, the bev overlay should be the max depth bev.
+            # currently, the chain is in the smallest depth's resolution (finest).
+            if k == "chain":
+                (bev,) = features_to_RGB(
+                    pred[128.0]["features_bev"].numpy(),
+                    masks=[pred[128.0]["valid_bev"].numpy()],
+                )
+                bev = (
+                    torch.nn.functional.interpolate(
+                        torch.from_numpy(bev).moveaxis(-1, -3).unsqueeze(1),
+                        scale_factor=4,
+                    )
+                    .squeeze(1)
+                    .moveaxis(-3, -1)
+                    .numpy()
+                )
+            else:
+                (bev,) = features_to_RGB(
+                    pred[k]["features_bev"].numpy(),
+                    masks=[pred[k]["valid_bev"].numpy()],
+                )
             bev = np.swapaxes(bev, 0, 1)
-            plot_bev(bev, uv=m_t_c_pred, yaw=yaw_p, zorder=10, ax=axes[1])
+            for map_idx in maps_to_draw_on:
+                plot_bev(
+                    bev,
+                    uv=m_t_c_pred,
+                    yaw=yaw_p,
+                    zorder=10,
+                    ax=axes[map_idx],
+                    only_outline=True,
+                )
 
         if show_gps and tile_t_gps is not None:
             m_t_gps = Transform2D.to_pixels(
                 tile_t_gps,
                 1 / bev_ppm,
             )
-            plot_pose(
-                [1] + ([2] if len(maps_viz) > 1 else []),
-                m_t_gps,
-                c="blue",
-                refactored=True,
-            )
+            plot_pose(maps_to_draw_on, m_t_gps, c="blue", refactored=True)
+        side = maps_viz[0].shape[
+            0
+        ]  # pred[k]['semantic_map']["map_features"][0].shape[-1]
         plot_pose(
-            [1] + ([2] if len(maps_viz) > 1 else []),
+            maps_to_draw_on,
             m_t_c_gt,
             yaw_gt,
             c="red",
             refactored=True,
+            # scale=side/(bev_ppm*k*4)
+            scale=side / 256,
         )
         plot_pose(
-            [1] + ([2] if len(maps_viz) > 1 else []),
-            m_t_c_pred,
-            yaw_p,
-            c="k",
-            refactored=True,
+            maps_to_draw_on, m_t_c_pred, yaw_p, c="k", refactored=True, scale=side / 256
         )
 
-        plot_dense_rotations(
-            2 if len(maps_viz) == 1 else 3, lp_ijt.exp(), refactored=True
-        )
+        plot_dense_rotations(len(maps_viz) + 1, lp_ijt.exp(), refactored=True)
         # inset_center = m_t_c_pred if results["xy_max_error"] < 5 else m_t_c_gt
 
         # Doesn't work for refactored axes conventions
@@ -222,10 +277,15 @@ def plot_example_single(
             name_ = name.replace("/", "_")
             p = str(
                 out_dir
-                / f"{idx}_{results[f'xy_max_error_{str(int(k))}']:.1f}_{scene}_{name_}_{k}_{{}}.png"
+                / f"{idx}_{results[f'xy_max_error_{k_str}']:.1f}_{scene}_{name_}_{k}_{{}}.png"
             )
+
             save_plot(p.format("pred"))
             plt.close()
+
+        # Don't plot bev or scales for chain - they are not "chained"
+        if k == "chain":
+            continue
 
         if return_plots:
             import matplotlib
@@ -238,7 +298,7 @@ def plot_example_single(
             buf.seek(0)
             plot = Image.open(buf)
             plots.append(to_tensor(plot))
-
+            buf.close()
         else:
             plt.show()
 
@@ -289,7 +349,41 @@ def plot_example_single(
             # else:
             #     plt.show()
 
-        
+        if fig_for_paper:
+            # !cp ../datasets/MGL/{scene}/images/{name}.jpg {out_dir}/{scene}_{name}.jpg
+            # plot_images([map_viz])
+            # plt.gca().images[0].set_interpolation("none")
+            # plot_nodes(0, rasters[2])
+            # plot_pose([0], m_t_c_gt, yaw_gt, c="red")
+            # plot_pose([0], m_t_c_pred, yaw_p, c="k")
+            # save_plot(p.format("map"))
+            # plt.close()
+            # plot_images([lp_ij], cmaps="jet")
+            # plot_dense_rotations(0, lp_ijt.exp())
+            # save_plot(p.format("loglikelihood"), dpi=100)
+            # plt.close()
+            # plot_images([overlay])
+            # plt.gca().images[0].set_interpolation("none")
+            # axins = add_circle_inset(plt.gca(), inset_center)
+            # axins.scatter(*m_t_c_gt, lw=1, c="red", ec="k", s=50)
+            # save_plot(p.format("likelihood"))
+            # plt.close()
+            # write_torch_image(
+            #     p.format("neuralmap").replace("pdf", "jpg"), feats_map_rgb
+            # )
+            # write_torch_image(p.format("image").replace("pdf", "jpg"), image.numpy())
+            #
+            # neural cutout
+            plot_images([bev, feats_map_rgb], origins=["lower", "lower"])
+            plot_pose(
+                [1],
+                m_t_c_gt,
+                yaw_gt,
+                c="black",
+                refactored=True,
+            )
+            save_plot(p.format("PAPER_pred"))
+            plt.close()
 
         scales_scores = pred[k]["pixel_scales"]  # [..., 2:-7]
         z_max = k
@@ -316,7 +410,10 @@ def plot_example_single(
         if "semantic_map" in pred[k] and "log_prior" in pred[k]["semantic_map"]:
             prior = pred[k]["semantic_map"]["log_prior"][0].sigmoid()
         if "bev" in pred[k] and "confidence" in pred[k]["bev"]:
+            # In multiscale weighted training, the confidences are exp scaled so we log for viz
             conf_q = pred[k]["bev"]["confidence"]
+            if model.model.conf.add_temperature:
+                conf_q = torch.log(conf_q)  # add 1e-10?
         else:
             conf_q = torch.norm(feats_q, dim=0)
         conf_q = conf_q.masked_fill(~mask_bev, np.nan)
@@ -394,78 +491,6 @@ def plot_example_single(
             plots.append(to_tensor(plot))
         else:
             plt.show()
-
-        if fig_for_paper:
-            # # !cp ../datasets/MGL/{scene}/images/{name}.jpg {out_dir}/{scene}_{name}.jpg
-            # plot_images([map_viz])
-            # plt.gca().images[0].set_interpolation("none")
-            # plot_nodes(0, rasters[2])
-            # plot_pose([0], m_t_c_gt, yaw_gt, c="red")
-            # plot_pose([0], m_t_c_pred, yaw_p, c="k")
-            # save_plot(p.format("map"))
-            # plt.close()
-            # plot_images([lp_ij], cmaps="jet")
-            # plot_dense_rotations(0, lp_ijt.exp())
-            # save_plot(p.format("loglikelihood"), dpi=100)
-            # plt.close()
-            # plot_images([overlay])
-            # plt.gca().images[0].set_interpolation("none")
-            # axins = add_circle_inset(plt.gca(), inset_center)
-            # axins.scatter(*m_t_c_gt, lw=1, c="red", ec="k", s=50)
-            # save_plot(p.format("likelihood"))
-            # plt.close()
-            # write_torch_image(
-            #     p.format("neuralmap").replace("pdf", "jpg"), feats_map_rgb
-            # )
-            # write_torch_image(p.format("image").replace("pdf", "jpg"), image.numpy())
-
-            # Plot the row of image, bev conf, bev
-            # plot_images(
-            # [image, ],
-            # dpi=100,
-            # cmaps="jet",
-            # )
-            # plot_images(
-            # [image, conf_q, feats_q_rgb],
-            # dpi=125,
-            # cmaps="jet",
-            # )
-
-            # Get map raster cutout.
-
-            f_bev = pred[k]["features_bev"]
-            rasters = data["semantic_map"][k]
-            print(rasters.shape)
-            # f_map = Colormap.apply(rasters)
-            f_map = pred[k]["features_map"]
-            (f_map,) = features_to_RGB(f_map.numpy())
-            print(f_map.shape)
-            # f_map = f_map.permute(2, 0, 1)
-            # print(f_map.shape)
-            map_T_cam = map_T_cam_gt
-
-            map_raster_cutout, _ = neural_cutout( # hacky - remove for final version.
-                    f_bev, torch.from_numpy(f_map).permute(2, 0, 1).unsqueeze(0), map_T_cam
-            )
-            map_raster_cutout = map_raster_cutout.squeeze()
-            map_raster_cutout = map_raster_cutout.masked_fill(~mask_bev, 1.).permute(1,2,0).numpy()
-            map_raster_cutout = np.swapaxes(map_raster_cutout, 0, 1)
-
-            plot_images(
-            [image, map_raster_cutout, conf_q, feats_q_rgb],
-            dpi=125,
-            origins=["upper", "lower", "lower", "lower"],
-            cmaps="jet"
-            )
-            # plot_nodes(1, rasters[2], refactored=True)
-            fig = plt.gcf()
-            axes = fig.axes
-            axes[1].images[0].set_interpolation("none")
-            axes[2].images[0].set_interpolation("none")
-            save_plot(p.format("THESIS"))
-            plt.close()
-
-
 
     return plots
 
