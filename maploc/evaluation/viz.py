@@ -12,6 +12,7 @@ from torchvision.transforms.functional import to_tensor
 from maploc.utils.wrappers import Transform2D
 
 from ..osm.viz import Colormap, plot_nodes
+from ..utils.neural_cutout import neural_cutout
 from ..utils.io import write_torch_image
 from ..utils.viz_2d import features_to_RGB, plot_images, save_plot
 from ..utils.viz_localization import (
@@ -188,14 +189,18 @@ def plot_example_single(
 
         Colormap.add_colorbar()
 
-        if "semantic_map" in pred[k] and k == 32.0:
+        if (
+            "semantic_map" in pred[k]
+            and k == 32.0
+            and pred[k]["semantic_map"]["map_features"][0].shape[-1] <= 256
+        ):
             # On large maps, node labels overlap and can be unreadable
             plot_nodes(1, rasters[2], refactored=True)
 
         maps_to_draw_on = [x + 1 for x in list(range(len(maps_viz)))]
         if overlay_bev:
             # TODO: when chaining, the bev overlay should be the max depth bev.
-            # currently, the chain is in the smallest depth's resolution (finest).
+            # the chain is in the smallest depth's resolution (finest).
             if k == "chain":
                 (bev,) = features_to_RGB(
                     pred[128.0]["features_bev"].numpy(),
@@ -217,7 +222,15 @@ def plot_example_single(
                 )
             bev = np.swapaxes(bev, 0, 1)
             for map_idx in maps_to_draw_on:
-                plot_bev(bev, uv=m_t_c_pred, yaw=yaw_p, zorder=10, ax=axes[map_idx], only_outline=True)
+                # for map_idx in [2]:
+                plot_bev(
+                    bev,
+                    uv=m_t_c_pred,
+                    yaw=yaw_p,
+                    zorder=10,
+                    ax=axes[map_idx],
+                    only_outline=True,
+                )
 
         if show_gps and tile_t_gps is not None:
             m_t_gps = Transform2D.to_pixels(
@@ -230,22 +243,30 @@ def plot_example_single(
                 c="blue",
                 refactored=True,
             )
+
+        side = maps_viz[0].shape[0]
         plot_pose(
             maps_to_draw_on,
+            # [1, 2],
             m_t_c_gt,
             yaw_gt,
             c="red",
             refactored=True,
+            scale=side / 256,
         )
         plot_pose(
             maps_to_draw_on,
+            # [2],
             m_t_c_pred,
             yaw_p,
             c="k",
             refactored=True,
+            scale=side / 256,
         )
 
-        plot_dense_rotations(len(maps_viz) + 1, lp_ijt.exp(), refactored=True)
+        plot_dense_rotations(
+            len(maps_viz) + 1, lp_ijt.exp(), refactored=True, scale=side / 256
+        )
         # inset_center = m_t_c_pred if results["xy_max_error"] < 5 else m_t_c_gt
 
         # Doesn't work for refactored axes conventions
@@ -270,7 +291,7 @@ def plot_example_single(
                 / f"{idx}_{results[f'xy_max_error_{k_str}']:.1f}_{scene}_{name_}_{k}_{{}}.png"
             )
 
-            save_plot(p.format("pred"))
+            save_plot(p.format("0pred"))
             plt.close()
 
         # Don't plot bev or scales for chain - they are not "chained"
@@ -288,6 +309,7 @@ def plot_example_single(
             buf.seek(0)
             plot = Image.open(buf)
             plots.append(to_tensor(plot))
+            buf.close()
         else:
             plt.show()
 
@@ -362,7 +384,6 @@ def plot_example_single(
             # )
             # write_torch_image(p.format("image").replace("pdf", "jpg"), image.numpy())
             #
-            # neural cutout
             plot_images([bev, feats_map_rgb], origins=["lower", "lower"])
             plot_pose(
                 [1],
@@ -374,7 +395,7 @@ def plot_example_single(
             save_plot(p.format("PAPER_pred"))
             plt.close()
 
-        scales_scores = pred[k]["pixel_scales"]  # [..., 2:-7]
+        scales_scores = pred[k]["pixel_scales"]
         z_max = k
         if z_max == 256.0:
             scales_scores[..., -10:] = 0  # 256m
@@ -385,6 +406,15 @@ def plot_example_single(
         elif z_max == 32.0:
             scales_scores[..., :6] = scales_scores[..., -7:] = 0  # 32m
         # max_scoring_scale = scales_scores.max(-1).indices  # scale with highest score
+
+        # if k == 32.0:  # really weird hack. fix this
+        # scales_scores = scales_scores.flip(-1)  # [..., 2:-7]
+
+        # z_max = k
+        # if z_max == 128.0:
+        #     scales_scores[..., :4] = scales_scores[...,16:] = 0  # 128m
+        # elif z_max == 32.0:
+        #     scales_scores[..., :10] = scales_scores[..., 17:] = 0  # 32m
 
         log_prob = torch.nn.functional.log_softmax(scales_scores, dim=-1)
         scales_exp = torch.sum(
@@ -402,36 +432,63 @@ def plot_example_single(
             # In multiscale weighted training, the confidences are exp scaled so we log for viz
             conf_q = pred[k]["bev"]["confidence"]
             if model.model.conf.add_temperature:
-                conf_q = torch.log(conf_q)  # add 1e-10?
+                # weird fix to remove sharp outliers in bev viz
+                if k == 32.0:
+                    conf_q = conf_q.clamp(max=conf_q.quantile(0.6))
+                    conf_q = torch.log(conf_q)
+                    lower_bound = conf_q.quantile(0.01)  # 5th percentile
+                    upper_bound = conf_q.quantile(0.55)
+                else:
+                    conf_q = conf_q.clamp(max=conf_q.quantile(0.55))
+                    conf_q = torch.log(conf_q)
+                    lower_bound = conf_q.quantile(0.00)  # 5th percentile
+                    upper_bound = conf_q.quantile(0.99)
+
+                conf_q = conf_q.clamp(min=lower_bound, max=upper_bound)
         else:
             conf_q = torch.norm(feats_q, dim=0)
         conf_q = conf_q.masked_fill(~mask_bev, np.nan)
         (feats_q_rgb,) = features_to_RGB(feats_q.numpy(), masks=[mask_bev.numpy()])
         # feats_map_rgb, feats_q_rgb, = features_to_RGB(
         #     feats_map.numpy(), feats_q.numpy(), masks=[None, mask_bev])
+
+        # Add Neural Map cutout at GT Pose
+        neural_crop, valid_cutout = neural_cutout(
+            feats_q,
+            torch.from_numpy(np.swapaxes(feats_map_rgb, 0, 1))
+            .permute(2, 0, 1)
+            .unsqueeze(0),
+            map_T_cam_gt,
+        )
+        neural_crop = (
+            neural_crop.masked_fill(~(mask_bev & valid_cutout), 1.0)
+            .permute(0, 2, 3, 1)
+            .squeeze(0)
+        )
+
         norm_map = torch.norm(feats_map, dim=0)
-        conf_q, feats_q_rgb, norm_map = [
-            np.swapaxes(x, 0, 1) for x in [conf_q, feats_q_rgb, norm_map]
+        conf_q, feats_q_rgb, neural_crop = [
+            np.swapaxes(x, 0, 1) for x in [conf_q, feats_q_rgb, neural_crop.numpy()]
         ]
 
         if prior is not None:
             prior = np.swapaxes(prior, 0, 1)
         origins = ["lower", "lower", "lower"] + ([] if prior is None else ["lower"])
         plot_images(
-            [conf_q, feats_q_rgb, norm_map] + ([] if prior is None else [prior]),
+            [conf_q, feats_q_rgb, neural_crop] + ([] if prior is None else [prior]),
             titles=[
                 "BEV confidence",
                 "BEV features",
-                "map norm",
+                "neural map crop",
             ]
             + ([] if prior is None else ["map prior"]),
             origins=origins,
-            dpi=50,
+            dpi=75,
             cmaps="jet",
         )
 
         if out_dir is not None:
-            save_plot(p.format("bev"))
+            save_plot(p.format("1bev"))
             plt.close()
 
         if return_plots:
@@ -442,6 +499,7 @@ def plot_example_single(
             buf.seek(0)
             plot = Image.open(buf)
             plots.append(to_tensor(plot))
+            buf.close()
         else:
             plt.show()
 
@@ -455,19 +513,33 @@ def plot_example_single(
         (feats_image,) = features_to_RGB(f_image[start:end, ...].numpy())
         origins = ["upper", "upper", "upper", "upper"]
         plot_images(
-            [feats_image, scales_exp, max_score, total_score],
+            [feats_image, scales_exp, max_score],  # , total_score],
             titles=[
                 "Image Features",
                 "Expected scale",
                 "Max Score",
-                "Total score",
+                # "Total score",
             ],
             origins=origins,
             dpi=50,
             cmaps="jet",
         )
+
+        # Overlay image on max score and depth
+        axs = plt.gcf().axes
+        resized_image = (
+            torch.nn.functional.interpolate(
+                image.permute(2, 0, 1).unsqueeze(0), scale_factor=0.5
+            )
+            .squeeze()
+            .permute(1, 2, 0)
+            .numpy()
+        )
+        axs[1].imshow(resized_image, alpha=0.50, origin="upper")
+        axs[2].imshow(resized_image, alpha=0.50, origin="upper")
+
         if out_dir is not None:
-            save_plot(p.format("scales"))
+            save_plot(p.format("2scales"))
             plt.close()
 
         if return_plots:

@@ -336,76 +336,6 @@ def evaluate_single_image_chain(
 
 
 @torch.no_grad()
-def evaluate_single_image_chain_RandomScale(
-    dataloader: torch.utils.data.DataLoader,
-    model: GenericModule,
-    num: Optional[int] = None,
-    callback: Optional[Callable] = None,
-    progress: bool = True,
-    mask_index: Optional[Tuple[int]] = None,
-    has_gps: bool = False,
-    **kwargs,
-):
-
-    # ppm = models[0].model.conf.pixel_per_meter
-    metrics = MetricCollection(models[0].model.metrics())
-    metrics = metrics.to(models[0].device)
-
-    names = []
-
-    for i, batch_ in enumerate(
-        islice(tqdm(dataloader, total=num, disable=not progress), num)
-    ):
-
-        preds = []
-        batches = []
-        if kwargs.get("selected_images"):
-            if batch_["name"][0] not in kwargs.get("selected_images"):
-                continue
-        for scale_idx, model in enumerate(models):
-            batch_["scale_idx"] = torch.tensor([scale_idx])
-            batch = model.transfer_batch_to_device(batch_, model.device, i)
-            pred = model(batch)
-            preds.append(pred)
-            batches.append(batch)
-
-        scores = [pred["scores"] for pred in preds]
-        h = w = max([score.shape[-2] for score in scores])
-        scores = [
-            torch.nn.functional.interpolate(
-                score.moveaxis(-1, -3), size=(h, w), mode="bilinear"
-            ).moveaxis(-3, -1)
-            for score in scores
-        ]
-        log_probs = [log_softmax_spatial(score) for score in scores]
-        log_probs_chained = log_softmax_spatial(torch.stack(log_probs).sum(0))
-
-        pred = preds[0]
-        model = models[0]
-        batch = batches[0]
-
-        uvr_max = argmax_xyr(log_probs_chained)
-        ij_max = torch.flip(uvr_max[..., :2], dims=[-1])
-        yaw_max = 180 - uvr_max[..., -1]
-        map_T_max = Transform2D.from_degrees(yaw_max.unsqueeze(-1), ij_max)
-        pred["map_T_cam_max"] = map_T_max
-        upsample_ppm = max(model.cfg.data.bev_ppm.pixel_per_meter)
-        pred["tile_T_cam_max"] = Transform2D.from_pixels(map_T_max, 1 / upsample_ppm)
-        pred["log_probs"] = log_probs_chained
-
-        names += batch["name"]
-
-        results = metrics(pred, batch)
-        if callback is not None:
-            callback(
-                i, model, unbatch_to_device(pred), unbatch_to_device(batch), results
-            )
-        del batches, preds, results
-
-    return metrics.cpu(), names
-
-
-@torch.no_grad()
 def evaluate_single_image(
     dataloader: torch.utils.data.DataLoader,
     model: GenericModule,
@@ -658,6 +588,14 @@ def evaluate_single_image(
             ]
 
         results = metrics(pred, batch)
+
+        # if not (results["xy_max_error_chain"] < 4 and results["xy_max_error_chain"] < results["xy_max_error_128"] < results["xy_max_error_32"]):
+        #     continue
+
+        # mining good examples for thesis
+        # if results["xy_max_error_chain"] > 10:
+        #     continue
+
         if callback is not None:
             callback(
                 i,
@@ -804,19 +742,19 @@ def select_images_from_log(log_paths):
             #         log_data["names"],
             #     )
             # )
-            # if i == 0:
-
-            #     # logs[i] = list(zip(log_data["errors"]["xy_max_error"], log_data["names"]))
-            #     logs[i] = [log_data["errors"]["xy_max_error"]] # Orienternet
-            # else:
-            logs[i] = list(
-                zip(
-                    log_data["errors"]["xy_max_error_32"],
-                    log_data["errors"]["xy_max_error_128"],
-                    log_data["errors"]["xy_max_error_chain"],
-                    log_data["names"],
-                )
-            )
+            if i == 0:
+                # logs[i] = list(zip(log_data["errors"]["xy_max_error"], log_data["names"]))
+                logs[i] = [log_data["errors"]["xy_max_error"]]  # Orienternet
+            else:
+                logs[i] = list(log_data["errors"]["xy_max_error_chain"])
+                # logs[i] = list(
+                #     zip(
+                #         log_data["errors"]["xy_max_error_32"],
+                #         log_data["errors"]["xy_max_error_128"],
+                #         log_data["errors"]["xy_max_error_chain"],
+                #         log_data["names"],
+                #     )
+                # )
             # logs[i] = list(log_data["errors"]["xy_max_error_chain"])
 
             # We must sort
@@ -835,41 +773,48 @@ def select_images_from_log(log_paths):
         #     n for value, n in sorted(list(zip(diff, sorted_names)), key=lambda x: x[0])
         # ]
 
+        # selected_images = [
+        #     n
+        #     for (n, single, multiscale1) in list(zip(sorted_names, logs[0], logs[1]))
+        #     # if (
+        #     #     single[0] > 15
+        #     #     and single[1] > 15  # 32m
+        #     #     and single[2] > 15  # 128m
+        #     #     and  # chain
+        #     #     # multiscale1[0] > 15 and
+        #     #     # multiscale1[1] > 15 and
+        #     #     multiscale1[2] < 15
+        #     # )
+        #     if (
+        #         # # single[0] > 20
+        #         # and single[1] > 15  # 32m
+        #         # and single[2] > 15  # 128m
+        #         # and
+        #         # multiscale1[0] > 15 and
+        #         # multiscale1[1] < 3
+        #         # and single[2] > 8
+        #         # and multiscale1[1] < single[1]
+        #         # and multiscale1[0] < single[0]
+        #         ##
+        #         multiscale1[2] < 5 < 15 < single[2]
+        #         ##
+        #         # single[2] > 20
+        #     )
+        # ] # [:25]  # + [
+        # #     n
+        # #     for (n, single, multiscale) in list(zip(sorted_names, logs[0], logs[1]))
+        # #     if (single > 20 and multiscale < 5)
+        # # ][
+        # #     :25
+        # # ]
+
         selected_images = [
             n
-            for (n, single, multiscale1) in list(zip(sorted_names, logs[0], logs[1]))
-            # if (
-            #     single[0] > 15
-            #     and single[1] > 15  # 32m
-            #     and single[2] > 15  # 128m
-            #     and  # chain
-            #     # multiscale1[0] > 15 and
-            #     # multiscale1[1] > 15 and
-            #     multiscale1[2] < 15
-            # )
-            if (
-                # single[0] > 20
-                # and single[1] > 15  # 32m
-                # and single[2] > 15  # 128m
-                # and
-                # multiscale1[0] > 15 and
-                # multiscale1[1] < 3
-                multiscale1[2] < 2
-                and single[2] > 15
-                and multiscale1[1] < single[1]
-                and multiscale1[0] < single[0]
-            )
-        ][
-            :25
-        ]  # + [
-        #     n
-        #     for (n, single, multiscale) in list(zip(sorted_names, logs[0], logs[1]))
-        #     if (single > 20 and multiscale < 5)
-        # ][
-        #     :25
-        # ]
+            for (n, orienternet, ours) in list(zip(sorted_names, logs[0], logs[1]))
+            if ours < 2.5 < 20 < orienternet
+        ]
 
-    return selected_images[:50]
+    return selected_images  # [:50]
 
 
 def evaluate_chain(
