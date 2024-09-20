@@ -227,10 +227,11 @@ class Demo:
 
     def localize(self, image: np.ndarray, camera: Camera, canvas: Canvas, **kwargs):
         data = self.prepare_data(image, camera, canvas, **kwargs)
-        data_ = apply_to_collection(data, (torch.Tensor, Camera), lambda x: x[None])
-        # data_ = {k: v.to(self.device)[None] for k, v in data.items() if isinstance(v, torch.Tensor)}
+        data = apply_to_collection(data, (torch.Tensor, Camera), lambda x: x[None])
+        data = move_data_to_device(data, self.device)
+        # data.update({k: v.to(self.device) for k, v in data.items() if isinstance(v, torch.Tensor) or isinstance(v, Camera)})
         with torch.no_grad():
-            pred = self.model(data_)
+            pred = self.model(data)
 
         # xy_gps = canvas[z_max_list[0]].bbox.center
         # uv_gps = torch.from_numpy(canvas.to_uv(xy_gps))
@@ -274,13 +275,15 @@ class Demo:
 
         f_map_fine = pred[32.0]["features_map"].cpu()
         image = data["image"].cpu()  # padded/rectified image
+        data = apply_to_collection(data, (torch.Tensor, Camera), lambda x: x[0])
         semantic_map = data["semantic_map"]  # this contains the memory-layout raster
+        pred = move_data_to_device(pred, 'cpu')
 
         return (
             tile_T_cam_max_chained,
             map_T_max,
             probs_chained,
-            f_map_fine,
+            f_map_fine.cpu(),
             image,
             semantic_map,
             pred,
