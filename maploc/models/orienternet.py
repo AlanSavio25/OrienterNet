@@ -56,6 +56,7 @@ class OrienterNet(BaseModel):
         "num_pose_sampling_retries": 8,
         "ransac_grid_refinement": False,
         "rescale_coarser_prob": False,  # making # prob values equal in multiscale
+        "cache_hierarchical": False,
         # deprecated
         "depth_parameterization": "scale",
         "norm_depth_scores": False,
@@ -84,6 +85,8 @@ class OrienterNet(BaseModel):
                     for _ in range(len(conf.bev_mapper.z_max))
                 ]
             )
+
+        self.bev_cache = None
 
     def exhaustive_voting(
         self,
@@ -125,19 +128,28 @@ class OrienterNet(BaseModel):
         # This will make data and pred consistent
 
         # Predict BEV from image
-        pred = self.bev_mapper(data)
+
+        if self.conf.cache_hierarchical and self.bev_cache is not None:
+            pred = self.bev_cache
+        else:
+            pred = self.bev_mapper(data)
+            if self.conf.cache_hierarchical:
+                self.bev_cache = pred
 
         # Generate neural map
         map_encoding = self.map_encoder(
             {
                 "semantic_map": data.get("semantic_map"),
                 "aerial_map": data.get("aerial_map"),
-            }
+            },
         )
-        for i, k in enumerate(map_encoding):
-            pred[k]["f_map"] = map_encoding[k]["map_features"]
+        for k in map_encoding:
+            if k in pred:
+                pred[k]["f_map"] = map_encoding[k]["map_features"]
 
-        for i, k in enumerate(self.conf.bev_mapper.z_max):
+        for i, k in enumerate(self.bev_mapper.conf.z_max):
+            if k is None:
+                continue
 
             f_map = pred[k]["f_map"]
             # TODO: move map mask to the map encoder?
@@ -212,6 +224,7 @@ class OrienterNet(BaseModel):
             log_probs = log_softmax_spatial(scores)  # already rotated
             with torch.no_grad():
                 uvr_max = argmax_xyr(scores).to(scores)
+                max_score = scores.flatten(-3).max(-1).values
                 uvr_avg, _ = expectation_xyr(log_probs.exp())
 
             # Convert rotated uv to ij
@@ -238,23 +251,25 @@ class OrienterNet(BaseModel):
                 bev_ij_pts = self.bev_mapper.cam_xy_pts[i] / resolution
                 # BEV faces east in the map frame by default, so we rotate the coords by 90deg
                 bev_ij_pts = Transform2D(torch.Tensor([-90, 0, 0])) @ bev_ij_pts
-                delta_p = 0.25  # m
+                delta_p = 0.20  # m
                 range_p = 2  # m
                 delta_r = 1.0  # deg
-                range_r = 5.0  # deg
-                map_T_cam_max_refined, _, _, _ = grid_refinement_orienternet_batched(
-                    map_T_cam_max._data,
-                    f_map,
-                    f_bev,
-                    bev_ij_pts.to(
-                        f_map
-                    ),  # TODO: construct this for forward and inverse bev mapper
-                    valid_bev,
-                    map_mask,
-                    delta_p / resolution,  # px
-                    range_p / resolution,  # px
-                    delta_r,
-                    range_r,
+                range_r = 10.0  # deg
+                map_T_cam_max_refined, max_score_refined, _, _ = (
+                    grid_refinement_orienternet_batched(
+                        map_T_cam_max._data,
+                        f_map,
+                        f_bev,
+                        bev_ij_pts.to(
+                            f_map
+                        ),  # TODO: construct this for forward and inverse bev mapper
+                        valid_bev,
+                        map_mask,
+                        delta_p / resolution,  # px
+                        range_p / resolution,  # px
+                        delta_r,
+                        range_r,
+                    )
                 )
                 tile_T_cam_max_refined = Transform2D.from_pixels(
                     Transform2D(map_T_cam_max_refined), resolution
@@ -263,6 +278,7 @@ class OrienterNet(BaseModel):
                     {
                         "tile_T_cam_max_refined": tile_T_cam_max_refined,
                         "map_T_cam_max_refined": map_T_cam_max_refined,
+                        "max_score_refined": max_score_refined,
                     }
                 )
 
@@ -277,6 +293,7 @@ class OrienterNet(BaseModel):
                     "valid_bev": valid_bev.squeeze(1),
                     "scores": scores,
                     "scores_unmasked": scores_unmasked,
+                    "max_score": max_score,
                     "log_probs": log_probs,
                 }
             )
@@ -352,6 +369,12 @@ class OrienterNet(BaseModel):
                     f"exhaustive_entropy_{int(s)}": ExhaustiveEntropy("log_probs", s),
                     f"xy_max_error_{int(s)}": Location2DError("tile_T_cam_max", s),
                     f"yaw_max_error_{int(s)}": AngleError("tile_T_cam_max", s),
+                    f"xy_median_max_error_{int(s)}": Location2DError(
+                        "tile_T_cam_max", s, "median"
+                    ),
+                    f"yaw_median_max_error_{int(s)}": AngleError(
+                        "tile_T_cam_max", s, "median"
+                    ),
                     f"xy_recall_0_5m_{int(s)}": Location2DRecall(
                         0.5, "tile_T_cam_max", s
                     ),
