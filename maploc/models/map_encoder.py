@@ -120,13 +120,15 @@ class MapEncoder(BaseModel):
             k: {}
             for k in [map_dict for map_dict in data.values() if map_dict is not None][0]
         }
-        assert (
-            self.conf.num_encoders == len(self.conf.backbone.output_scales) == len(pred)
-        )  # TODO: remove this
+        # assert (
+        #     self.conf.num_encoders == len(self.conf.backbone.output_scales) == len(pred)
+        # )  # TODO: remove this
         for idx, k in enumerate(pred):
             features = []
             # Semantic
             if data.get("semantic_map"):
+                if data["semantic_map"][k] is None:
+                    continue
                 features += [
                     self.embeddings[key](data["semantic_map"][k][:, i]).permute(
                         0, 3, 1, 2
@@ -137,6 +139,8 @@ class MapEncoder(BaseModel):
             # Aerial
             # Conv 1x1 to simply change the channel dims
             if data.get("aerial_map"):
+                if data["aerial_map"][k] is None:
+                    continue
                 aerial_map = (
                     data["aerial_map"][k] - self.mean_[:, None, None]
                 ) / self.std_[:, None, None]

@@ -15,6 +15,7 @@ from .bev_net import BEVNet
 from .bev_projection import CartesianProjection, PolarProjectionDepth
 from .voting import TemplateSampler
 
+
 @functools.partial(torch.vmap, in_dims=(0, 0, 0))
 def project_points_to_view(
     cam_R_gcam: torch.Tensor, camera: torch.Tensor, points: torch.Tensor  # 3x3
@@ -282,12 +283,12 @@ class BEVMapper(BaseModel):
 
     def _forward(self, data):
 
-        pred = {k: {} for k in self.conf.z_max}
+        pred = {k: {} for k in self.conf.z_max if k is not None}
 
         # Extract image features.
         level = 0
-
         f_image = self.image_encoder(data)["feature_maps"][level]
+
         camera = data["camera"].scale(1 / self.image_encoder.scales[level])
         camera = camera.to(data["image"].device, non_blocking=True)
 
@@ -316,7 +317,9 @@ class BEVMapper(BaseModel):
                 # Cartesian features through BEV Net -> f_bev+confidence
                 if self.conf.bev_net is None:
                     # channel last -> classifier -> channel first
-                    f_bev = self.feature_projection(f_bev.moveaxis(1, -1)).moveaxis(-1, 1)
+                    f_bev = self.feature_projection(f_bev.moveaxis(1, -1)).moveaxis(
+                        -1, 1
+                    )
                     pred[k]["bev"] = {"output": f_bev}
                 else:
                     pred[k]["bev"] = self.bev_net[i](
@@ -353,6 +356,8 @@ class BEVMapper(BaseModel):
             # Iterate through xy grids for each BEV
 
             for i, k in enumerate(self.conf.z_max):
+                if k is None:
+                    continue
                 if f_image.shape[-3] == self.conf.latent_dim:
                     start = 0
                     end = self.conf.latent_dim
@@ -388,7 +393,7 @@ class BEVMapper(BaseModel):
 
                 grid_shape = xyz.shape[:-1]
                 xyz_flat = xyz.reshape(len(xyz), -1, 3)  # B, N=129x64x24, 3
-                
+
                 # Compute the locations of 2D observations in camera view for all points
                 p2d_view, visible, depth, _ = project_points_to_view(
                     cam_R_gcam, camera._data, xyz_flat
