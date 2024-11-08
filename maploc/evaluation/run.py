@@ -7,18 +7,21 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig, OmegaConf, read_write
 from pytorch_lightning import seed_everything
 from torchmetrics import MetricCollection
 from tqdm import tqdm
 
+from lightning_utilities.core.apply_func import apply_to_collection
 from maploc.utils.wrappers import Transform2D
+from ..utils.geo import BoundaryBox
 
 from .. import EXPERIMENTS_PATH, logger
 from ..data.torch import collate, unbatch_to_device
 from ..models.sequential import GPSAligner, RigidAligner
 from ..models.voting import argmax_xyr, fuse_gps, log_softmax_spatial
 from ..utils.grids import grid_refinement_orienternet_batched
+from maploc.utils import grids
 from ..module import GenericModule
 from ..utils.io import DATA_URL, download_file, read_json
 from .utils import write_dump
@@ -32,6 +35,9 @@ from ..models.metrics import (
     LateralLongitudinalError,
 )
 from copy import deepcopy
+
+from ..osm.viz import Colormap
+from ..utils.viz_2d import features_to_RGB, plot_images, save_plot
 
 pretrained_models = dict(
     OrienterNet_MGL=("orienternet_mgl.ckpt", dict(num_rotations=256)),
@@ -593,8 +599,8 @@ def evaluate_single_image(
         #     continue
 
         # mining good examples for thesis
-        # if results["xy_max_error_chain"] > 10:
-        #     continue
+        if results["xy_max_error_chain"] > 2:
+            continue
 
         if callback is not None:
             callback(
@@ -610,102 +616,620 @@ def evaluate_single_image(
     return metrics.cpu(), names
 
 
+# def set_key_value_to_none(batch, key_to_set_none):
+#     """Turn off values in batch to force single branch forward pass"""
+#     dict_with_none_value = {key: ({k: (None if k == key_to_set_none else v) for k, v in batch[key].items()}
+#                 if isinstance(batch[key], dict) else batch[key]) for key in batch}
+#     return dict_with_none_value
+
+
+def disable_key(batch, target_keys, remove_key=False):
+    if not isinstance(target_keys, list):
+        target_keys = [target_keys]
+    ret = {}
+    for key in batch:
+        if isinstance(batch[key], dict):
+            ret.update(
+                {
+                    key: {
+                        k: (None if k in target_keys else v)
+                        for k, v in batch[key].items()
+                        if not (remove_key and k in target_keys)
+                    }
+                }
+            )
+        else:
+            ret.update({key: batch[key]})
+    return ret
+
+
 @torch.no_grad()
-def evaluate_sequential(
-    dataset: torch.utils.data.Dataset,
-    chunk2idx: Dict,
-    model: GenericModule,
+def evaluate_hierarchical(
+    dataloader: torch.utils.data.DataLoader,
+    model: GenericModule,  # our multi-scale model
     num: Optional[int] = None,
-    shuffle: bool = False,
     callback: Optional[Callable] = None,
     progress: bool = True,
-    num_rotations: int = 512,
     mask_index: Optional[Tuple[int]] = None,
-    has_gps: bool = False,
+    has_gps: bool = True,
+    prior_model: GenericModule = None,  # coarse prior model
+    **kwargs,
 ):
-    chunk_keys = list(chunk2idx)
-    if shuffle:
-        chunk_keys = [chunk_keys[i] for i in torch.randperm(len(chunk_keys))]
-    if num is not None:
-        chunk_keys = chunk_keys[:num]
-    lengths = [len(chunk2idx[k]) for k in chunk_keys]
-    logger.info(
-        "Min/max/med lengths: %d/%d/%d, total number of images: %d",
-        min(lengths),
-        np.median(lengths),
-        max(lengths),
-        sum(lengths),
+    """Evaluate single image with minimal memory requirement.
+    Match prior model (coarse res, large depth) on a large map first (optional),
+    then hierarchically match the coarse and fine BEVs on the best map crops.
+
+    Default:
+        Prior model: Res=4mpp, BEVDepth=256m,
+        Model: Res=(0.5mpp, 2mpp), BEVDepth=(32m,128m)
+        256px map radius corresponds to {64,256,1024}m at {0.5,2,4}mpp, respectively.
+    """
+
+    # Setup metrics for chain
+    metrics = model.model.metrics()
+    modes = [""]
+    values = [
+        ("0_5", 0.5),
+        ("01", 1.0),
+        ("02", 2.0),
+        ("05", 5.0),
+        ("10", 10.0),
+        ("20", 20.0),
+    ]
+    metrics.update(
+        {
+            "exhaustive_entropy_chain": ExhaustiveEntropy("log_probs", f"chain"),
+        }
     )
-    viz = callback is not None
+    for mode in modes:
+        metrics.update(
+            {
+                f"xy_max_error_chain{mode}": Location2DError(
+                    "tile_T_cam_max", f"chain{mode}"
+                ),
+                f"yaw_max_error_chain{mode}": AngleError(
+                    "tile_T_cam_max", f"chain{mode}"
+                ),
+            }
+        )
+        for val_str, val_float in values:
+            metrics.update(
+                {
+                    f"xy_recall_{val_str}m_chain{mode}": Location2DRecall(
+                        val_float, "tile_T_cam_max", f"chain{mode}"
+                    ),
+                    f"yaw_recall_{val_str}°_chain{mode}": AngleRecall(
+                        val_float, "tile_T_cam_max", f"chain{mode}"
+                    ),
+                }
+            )
 
-    metrics = MetricCollection(model.model.metrics())
-    ppm = model.model.conf.pixel_per_meter
-    metrics["directional_error"] = LateralLongitudinalError(ppm)
-    metrics["xy_seq_error"] = Location2DError("uv_seq", ppm)
-    metrics["yaw_seq_error"] = AngleError("yaw_seq")
-    metrics["directional_seq_error"] = LateralLongitudinalError(ppm, key="uv_seq")
     if has_gps:
-        metrics["xy_gps_error"] = Location2DError("uv_gps", ppm)
-        metrics["xy_gps_seq_error"] = Location2DError("uv_gps_seq", ppm)
-        metrics["yaw_gps_seq_error"] = AngleError("yaw_gps_seq")
+        scale_choice_idx = 0
+        scale_choice = list(model.model.conf.bev_mapper.z_max)[scale_choice_idx]
+        for val_str, val_float in values:
+            metrics.update(
+                {
+                    f"xy_gps_recall_{val_str}m": Location2DRecall(
+                        val_float, "tile_t_gps", scale_choice
+                    ),
+                    f"xy_gps_fused_recall_{val_str}m": Location2DRecall(
+                        val_float, "tile_T_fused", scale_choice
+                    ),
+                    f"yaw_gps_fused_recall_{val_str}°": AngleRecall(
+                        val_float, "tile_T_fused", scale_choice
+                    ),
+                }
+            )
+        metrics["xy_gps_error"] = Location2DError("tile_t_gps", scale_choice)
+        metrics["xy_gps_fused_error"] = Location2DError("tile_T_fused", scale_choice)
+        metrics["yaw_gps_fused_error"] = AngleError("tile_T_fused", scale_choice)
+    metrics = MetricCollection(metrics)
     metrics = metrics.to(model.device)
+    do_prior = prior_model is not None
+    if do_prior:
+        p_metrics = prior_model.model.metrics()
+        p_metrics = MetricCollection(p_metrics).to(prior_model.device)
+        prior_ppm = prior_model.model.conf.pixel_per_meter[0]
 
-    keys_save = ["uvr_max", "uv_max", "yaw_max", "uv_expectation"]
-    if has_gps:
-        keys_save.append("uv_gps")
-    if viz:
-        keys_save.append("log_probs")
+    ppm = model.model.conf.pixel_per_meter
 
-    for chunk_index, key in enumerate(tqdm(chunk_keys, disable=not progress)):
-        indices = chunk2idx[key]
-        aligner = RigidAligner(track_priors=viz, num_rotations=num_rotations)
-        if has_gps:
-            aligner_gps = GPSAligner(track_priors=viz, num_rotations=num_rotations)
-        batches = []
-        preds = []
-        for i in indices:
-            data = dataset[i]
-            data = model.transfer_batch_to_device(data, model.device, 0)
-            pred = model(collate([data]))
+    names = []
 
-            canvas = data["canvas"]
-            data["xy_geo"] = xy = canvas.to_xy(data["uv"].double())
-            data["yaw"] = yaw = data["roll_pitch_yaw"][-1].double()
-            aligner.update(pred["log_probs"][0], canvas, xy, yaw)
+    # Naming convention: prior=prior model. coarse is coarse branch and fine is fine branch of multiscale model.
+    # ptile is prior tile, ctile is coarse tile, ftile is fine tile
 
-            if has_gps:
-                (uv_gps) = pred["uv_gps"] = data["uv_gps"][None]
-                xy_gps = canvas.to_xy(uv_gps.double())
-                aligner_gps.update(xy_gps, data["accuracy_gps"], canvas, xy, yaw)
+    for i, batch_ in enumerate(
+        islice(tqdm(dataloader, total=num, disable=not progress), num)
+    ):
+        batch = model.transfer_batch_to_device(batch_, model.device, i)
+        if kwargs.get("selected_images"):  # for plotting
+            if batch["name"][0] not in kwargs.get("selected_images"):
+                continue
 
-            if not viz:
-                data.pop("image")
-                data.pop("map")
-            batches.append(data)
-            preds.append({k: pred[k][0] for k in keys_save})
-            del pred
+        # TODO: currently, input csm for finer res are non-zero. make zero.
 
-        xy_gt = torch.stack([b["xy_geo"] for b in batches])
-        yaw_gt = torch.stack([b["yaw"] for b in batches])
-        aligner.compute()
-        xy_seq, yaw_seq = aligner.transform(xy_gt, yaw_gt)
-        if has_gps:
-            aligner_gps.compute()
-            xy_gps_seq, yaw_gps_seq = aligner_gps.transform(xy_gt, yaw_gt)
-        results = []
-        for i in range(len(indices)):
-            preds[i]["uv_seq"] = batches[i]["canvas"].to_uv(xy_seq[i]).float()
-            preds[i]["yaw_seq"] = yaw_seq[i].float()
-            if has_gps:
-                preds[i]["uv_gps_seq"] = (
-                    batches[i]["canvas"].to_uv(xy_gps_seq[i]).float()
+        # config for topk
+        num_k_coarse = 3 if do_prior else 1
+        num_k_fine = 3 if not do_prior else 1
+        csm_coarse = 256
+        csm_fine = 64
+        # pmap_crad is radius of a cmap in pmap coords
+        # for masking - NMS
+        pmap_crad = csm_coarse * prior_ppm if do_prior else None
+        cmap_frad = csm_fine * ppm[1]
+
+        topk_poses_fine = []
+        p_topk_coords = []  # for plotting only
+
+        if prior_model is not None:
+            # batch has all 3 scales, set the others to none for a forward pass
+            batch_256m = disable_key(batch, [32.0, 128.0], remove_key=True)
+            pred_256m = prior_model(batch_256m)
+            pscores = pred_256m[256.0]["scores"].clone()
+            world_T_ptile = Transform2D.from_Rt(
+                torch.eye(2), batch_256m["canvas"][256.0][0].bbox.min_
+            ).float()
+
+        # Caching avoids redundant network forward passes
+        bev_cache_fine = None
+        bev_cache_coarse = None
+
+        # Loop through the topk small tiles on the Prior Map
+        for k_idx_coarse in range(num_k_coarse):
+
+            batch_128m = disable_key(batch, [32.0, 256.0])
+            if do_prior:
+                if k_idx_coarse == 0:
+                    pmap_T_maxcam = pred_256m[256.0]["map_T_cam_max"].float().squeeze(0)
+                    ptile_T_maxcam = pred_256m[256.0]["tile_T_cam_max"].float()
+                else:
+                    # Select best pose in NMS-masked score volume
+                    uvr_max = argmax_xyr(pscores).to(pscores)
+                    pmax_score = pscores.flatten(-3).max(-1).values
+                    ij_max = torch.flip(uvr_max[..., :2], dims=[-1])
+                    yaw_max = 180 - uvr_max[..., 2][..., None]
+                    pmap_T_maxcam = (
+                        Transform2D.from_degrees(yaw_max, ij_max).float().squeeze(0)
+                    )
+                    ptile_T_maxcam = (
+                        Transform2D.from_pixels(pmap_T_maxcam, 1 / prior_ppm)
+                        .float()
+                        .unsqueeze(0)
+                    )
+
+                world_T_maxcam = (
+                    world_T_ptile.to(ptile_T_maxcam.device) @ ptile_T_maxcam
+                ).squeeze(0)
+
+                # Prepare coarse raster bbox
+                ctile_manager = dataloader.dataset.tile_managers[batch["scene"][0]][
+                    1
+                ]  # use index 0 for the 32m ppm
+                min_ = np.maximum(
+                    world_T_maxcam.t.cpu().numpy() - csm_coarse, world_T_ptile.t
                 )
-                preds[i]["yaw_gps_seq"] = yaw_gps_seq[i].float()
-            results.append(metrics(preds[i], batches[i]))
-        if viz:
-            callback(chunk_index, model, batches, preds, results, aligner)
-        del aligner, preds, batches, results
-    return metrics.cpu()
+                min_ = np.maximum(min_, ctile_manager.bbox.min_)
+                min_ = np.minimum(
+                    min_, batch_256m["canvas"][256.0][0].bbox.max_ - csm_coarse * 2
+                )
+                min_ = np.minimum(min_, ctile_manager.bbox.max_ - (csm_coarse + 1) * 2)
+                max_ = min_ + 2 * csm_coarse
+                bbox_ctile = BoundaryBox(min_, max_)
+
+                # Query coarse raster
+                ccanvas = ctile_manager.query(bbox_ctile)
+                craster = torch.from_numpy(np.ascontiguousarray(ccanvas.raster)).long()
+                craster = torch.rot90(craster, -1, dims=(-2, -1))
+
+                # Assign queried coarse raster to the batch for forward pass
+                craster = craster.unsqueeze(0).to(model.device)
+                batch_128m["semantic_map"][128.0] = craster
+
+                pmap_min = Transform2D.to_pixels(
+                    world_T_ptile.inv() @ bbox_ctile.min_, 1 / prior_ppm
+                ).squeeze()
+
+                # plot the topk tiles
+                p_topk_coords.append((pmap_min, pmap_crad * 2, pmap_crad * 2))
+
+                # mask scores - NMS
+                x_start, y_start = (pmap_min + 0.25 * pmap_crad).to(int).numpy()
+                x_end, y_end = (pmap_min + 1.75 * pmap_crad).to(int).numpy()
+                pscores[..., x_start:x_end, y_start:y_end, :] = pred_256m[256.0][
+                    "scores"
+                ].min()
+                x_start, y_start = (
+                    (pmap_T_maxcam.t - 0.75 * pmap_crad).cpu().to(int).numpy()
+                )
+                x_end, y_end = (
+                    (pmap_T_maxcam.t + 0.75 * pmap_crad).cpu().to(int).numpy()
+                )
+                pscores[..., x_start:x_end, y_start:y_end, :] = pred_256m[256.0][
+                    "scores"
+                ].min()
+
+                world_T_ctile = Transform2D.from_Rt(
+                    torch.eye(2), bbox_ctile.min_
+                ).float()
+                ctile_T_ptile = world_T_ctile.inv() @ world_T_ptile
+                ctile_T_cam = (
+                    ctile_T_ptile.to(model.device) @ batch_256m["tile_T_cam"][256.0]
+                )
+                cmap_T_cam = Transform2D.to_pixels(ctile_T_cam, 1 / ccanvas.ppm)
+                # TODO: mask edges of the prior scores?
+            else:
+                ccanvas = None
+                craster = None
+                bbox_ctile = batch_128m["canvas"][128.0][0].bbox
+                ctile_T_cam = batch_128m["tile_T_cam"][128.0].cpu()
+
+                world_T_ctile = Transform2D.from_Rt(
+                    torch.eye(2), bbox_ctile.min_
+                ).float()
+
+            # disable fine branch of network
+            with read_write(model.model.bev_mapper.conf):
+                model.model.bev_mapper.conf.z_max[0] = None
+                model.model.bev_mapper.conf.z_max[1] = 128.0
+
+            # Coarse Localization
+            model.model.bev_cache = bev_cache_coarse
+            pred_128m = model(batch_128m)
+            bev_cache_coarse = model.model.bev_cache
+            cscores = pred_128m[128.0]["scores"].clone()
+
+            c_topk_coords = []
+
+            # Loop through the topk fine maps
+            for k_idx_fine in range(num_k_fine):
+                if k_idx_fine == 0:
+                    cmap_T_maxcam = pred_128m[128.0]["map_T_cam_max"].float().squeeze(0)
+                    ctile_T_maxcam = pred_128m[128.0]["tile_T_cam_max"].float()
+                else:
+                    uvr_max = argmax_xyr(cscores).to(cscores)
+                    cmax_score = cscores.flatten(-3).max(-1).values
+                    ij_max = torch.flip(uvr_max[..., :2], dims=[-1])
+                    yaw_max = 180 - uvr_max[..., 2][..., None]
+                    cmap_T_maxcam = (
+                        Transform2D.from_degrees(yaw_max, ij_max).float().squeeze(0)
+                    )
+                    ctile_T_maxcam = (
+                        Transform2D.from_pixels(cmap_T_maxcam, 1 / ppm[1])
+                        .float()
+                        .unsqueeze(0)
+                    )
+                world_T_maxcam = (
+                    world_T_ctile.to(ctile_T_maxcam.device) @ ctile_T_maxcam
+                ).squeeze(0)
+
+                # Prepare fine bbox
+                ftile_manager = dataloader.dataset.tile_managers[batch["scene"][0]][
+                    0
+                ]  # use index 0 for the 32m ppm
+                min_ = np.maximum(
+                    world_T_maxcam.t.cpu().numpy() - csm_fine, world_T_ctile.t
+                )
+                min_ = np.maximum(min_, ftile_manager.bbox.min_)
+                min_ = np.minimum(min_, world_T_ctile.t + csm_coarse * 2 - csm_fine * 2)
+                min_ = np.minimum(min_, ftile_manager.bbox.max_ - (csm_fine + 0.5) * 2)
+                max_ = min_ + 2 * csm_fine
+                bbox_ftile = BoundaryBox(min_, max_)
+
+                # Query fine raster
+                fcanvas = ftile_manager.query(bbox_ftile)
+                fraster = torch.from_numpy(np.ascontiguousarray(fcanvas.raster)).long()
+                fraster = torch.rot90(fraster, -1, dims=(-2, -1))
+                batch_32m = disable_key(batch, [128.0, 256.0])
+                batch_32m["semantic_map"][32.0] = fraster.unsqueeze(0).to(model.device)
+
+                cmap_min = Transform2D.to_pixels(
+                    world_T_ctile.inv() @ bbox_ftile.min_, 1 / ppm[1]
+                ).squeeze()
+
+                # plot topk fine maps
+                c_topk_coords.append((cmap_min, cmap_frad * 2, cmap_frad * 2))
+
+                # mask scores - NMS
+                # x_start, y_start = (cmap_min + 0.25*cmap_frad).to(int).numpy()
+                # x_end, y_end = (cmap_min + 1.75*cmap_frad).to(int).numpy()
+                x_start, y_start = (
+                    (cmap_T_maxcam.t - 0.75 * cmap_frad).cpu().to(int).numpy()
+                )
+                x_end, y_end = (
+                    (cmap_T_maxcam.t + 0.75 * cmap_frad).cpu().to(int).numpy()
+                )
+                cscores[..., x_start:x_end, y_start:y_end, :] = pred_128m[128.0][
+                    "scores"
+                ].min()
+
+                # disable coarse branch for forward pass
+                with read_write(model.model.bev_mapper.conf):
+                    model.model.bev_mapper.conf.z_max[0] = 32.0
+                    model.model.bev_mapper.conf.z_max[1] = None
+
+                # Forward pass through fine branch
+                model.model.bev_cache = bev_cache_fine
+                pred_32m = model(batch_32m)
+                bev_cache_fine = model.model.bev_cache
+                fscores = pred_32m[32.0]["scores"]
+
+                # Sample coarse scores for all fine points.
+                width = depth = csm_fine * 2
+                cell_size = 1 / ppm[0]
+                grid = grids.Grid2D.from_extent_meters((width, depth), cell_size)
+                ftile_xy_pts = grid.index_to_xyz(grid.grid_index())
+                fmap_xy_pts = Transform2D.to_pixels(ftile_xy_pts, 1 / ppm[0])
+                world_T_ftile = Transform2D.from_Rt(
+                    torch.eye(2), bbox_ftile.min_
+                ).float()
+                ctile_T_ftile = world_T_ctile.inv() @ world_T_ftile
+                ctile_xy_pts = ctile_T_ftile @ ftile_xy_pts
+                cmap_xy_pts = Transform2D.to_pixels(ctile_xy_pts, 1 / ppm[1])
+                cmap_interp, _, _ = grids.interpolate_nd(
+                    pred_128m[128.0]["scores"].moveaxis(-1, -3).squeeze(0),
+                    cmap_xy_pts.to(cscores.device).reshape(-1, 2),  # 8, H, W  # I*J, 2
+                )
+                cmap_interp = (
+                    cmap_interp.unsqueeze(0).moveaxis(-2, -1).reshape(1, 256, 256, 64)
+                )
+
+                # Chain probabilities of the fine and coarse
+                log_probs = [
+                    log_softmax_spatial(fscores),
+                    log_softmax_spatial(cmap_interp),
+                ]
+                log_probs_chained = log_softmax_spatial(torch.stack(log_probs).sum(0))
+
+                # Extract joint best pose
+                uvr_max = argmax_xyr(log_probs_chained)
+                ij_max = torch.flip(uvr_max[..., :2], dims=[-1])
+                yaw_max = 180 - uvr_max[..., -1]
+                fmap_T_maxcam = Transform2D.from_degrees(yaw_max.unsqueeze(-1), ij_max)
+                ftile_T_maxcam = Transform2D.from_pixels(fmap_T_maxcam, 1 / ppm[0])
+
+                # debug
+                # special_points = {}
+                # pred["chain"] = {}
+                # pred["chain"]["map_T_cam_max"] = map_T_max
+                # pred["chain"]["tile_T_cam_max"] = tile_T_cam_max_chained = (
+                #     Transform2D.from_pixels(map_T_max, 1 / upsample_ppm)
+                # )
+                # pred["chain"]["log_probs"] = log_probs_chained
+                # batch["tile_T_cam"]["chain"] = batch["tile_T_cam"][
+                #     model.model.conf.bev_mapper.z_max[0]
+                # ]
+
+                max_score = (fscores + cmap_interp).flatten(-3).max(-1).values
+
+                # Store predicted pose and score.
+                topk_poses_fine.append(
+                    (
+                        {
+                            128.0: deepcopy(pred_128m[128.0]),
+                            32.0: deepcopy(pred_32m[32.0]),
+                            "chain": {
+                                "tile_T_cam_max": ftile_T_maxcam,
+                                "map_T_cam_max": fmap_T_maxcam,
+                                "max_score": max_score,
+                                "log_probs": log_probs_chained,
+                            },
+                        },
+                        fcanvas,
+                        fraster.unsqueeze(0).to(model.device),
+                        bbox_ftile,
+                        ccanvas,
+                        craster,
+                        bbox_ctile,
+                        c_topk_coords,
+                    )
+                )
+
+            # Reset the cache for the next forward pass
+            bev_cache_fine = None
+
+        bev_cache_coarse = None
+
+        # Select best pose out of topk
+        (
+            best_pred,
+            fcanvas,
+            fraster,
+            bbox_ftile,
+            ccanvas,
+            craster,
+            bbox_ctile,
+            c_topk_coords,
+        ) = max(topk_poses_fine, key=lambda x: x[0]["chain"]["max_score"])
+
+        pred = {}
+        pred["features_image"] = pred_128m["features_image"]
+        pred[128.0] = best_pred[128.0]
+        pred[32.0] = best_pred[32.0]
+        pred["chain"] = best_pred["chain"]
+
+        # debug
+        # pred[32.0]['special_points'] = fmap_xy_pts[:100,:100,:]
+        # pred[128.0]['special_points'] = cmap_xy_pts[:100,:100,:]
+
+        if do_prior:
+            pred_256m[256.0]["topk"] = p_topk_coords
+        pred[128.0]["topk"] = c_topk_coords
+
+        # Transform fine GT to smaller map's frame
+        # world_T_ctile = Transform2D.from_Rt(torch.eye(2), bbox_ctile.min_).float()
+        if do_prior:
+            batch["tile_T_cam"][128.0] = ctile_T_cam.to(model.device)
+            batch["map_T_cam"][128.0] = cmap_T_cam.to(model.device)
+            batch["semantic_map"][128.0] = craster
+        world_T_ftile = Transform2D.from_Rt(torch.eye(2), bbox_ftile.min_).float()
+        ftile_T_ctile = world_T_ftile.inv() @ world_T_ctile
+        ftile_T_cam = ftile_T_ctile.to(model.device) @ ctile_T_cam.to(model.device)
+        fmap_T_cam = Transform2D.to_pixels(ftile_T_cam, 1 / fcanvas.ppm)
+        batch["tile_T_cam"][32.0] = ftile_T_cam.to(model.device)
+        batch["map_T_cam"][32.0] = fmap_T_cam.to(model.device)
+        batch["semantic_map"][32.0] = fraster
+
+        # GPS
+        ftile_t_gps = ftile_T_ctile.to(model.device).t + batch_128m["tile_t_gps"][128.0]
+        fmap_t_gps = Transform2D.to_pixels(ftile_t_gps, 1 / fcanvas.ppm)
+        batch["tile_t_gps"][32.0] = ftile_t_gps.to(model.device)
+        batch["map_t_gps"][32.0] = fmap_t_gps.to(model.device)
+        batch["tile_T_cam"]["chain"] = batch["tile_T_cam"][32.0]
+
+        if model.cfg.data.add_map_mask:
+            scores = [
+                pred[k]["scores_unmasked"] for k in pred if isinstance(k, (float, int))
+            ]
+        else:
+            scores = [pred[k]["scores"] for k in pred if isinstance(k, (float, int))]
+
+        if has_gps:  # TODO: temporarily turn this off.
+            # Evaluate either on a single map (each z_max maps to a different map)
+            map_t_gps = batch["map_t_gps"][scale_choice]
+            pred[scale_choice]["log_probs_fused"] = fuse_gps(
+                pred["chain"]["log_probs"],
+                map_t_gps,
+                ppm[scale_choice_idx],
+                sigma=batch["accuracy_gps"][scale_choice],
+                gaussian=True,
+                refactored=True,
+            )  # memory_layout
+            # TODO: refactor code for scale_choice_idx and upsample ppm to be same
+            uvr_gps_max = argmax_xyr(pred[scale_choice]["log_probs_fused"])
+            ij_gps_max = torch.flip(uvr_gps_max[..., :2], dims=[-1])
+            yaw_gps_max = 180 - uvr_gps_max[..., -1]
+            map_T_gps = Transform2D.from_degrees(yaw_gps_max.unsqueeze(-1), ij_gps_max)
+            pred[scale_choice]["tile_T_fused"] = tile_T_gps_fused_max = (
+                Transform2D.from_pixels(map_T_gps, 1 / ppm[scale_choice_idx])
+            )
+            pred[scale_choice]["tile_t_gps"] = Transform2D.from_pixels(
+                map_t_gps, 1 / ppm[scale_choice_idx]
+            )
+
+        if model.model.conf.grid_refinement:
+            delta_p = 0.5  # m
+            range_p = 2  # m
+            delta_r = 1.0  # deg
+            range_r = 5.0  # deg
+
+            poses = []
+            pose_scores_list = []
+            for idx, k in enumerate(model.model.conf.bev_mapper.z_max):
+
+                resolution = 1 / model.model.conf.pixel_per_meter[idx]
+                map_T_cam_max_chained = Transform2D.to_pixels(
+                    tile_T_cam_max_chained, resolution
+                )
+                bev_ij_pts = model.model.bev_mapper.cam_xy_pts[idx] / resolution
+                bev_ij_pts = Transform2D(torch.Tensor([-90, 0, 0])) @ bev_ij_pts
+
+                # Perform grid refinement
+                _, _, map_T_cam_samples, pose_scores = (
+                    grid_refinement_orienternet_batched(
+                        map_T_cam_max_chained._data,
+                        pred[k]["features_map"],
+                        pred[k]["features_bev"],
+                        bev_ij_pts.to(pred[k]["features_map"]),
+                        pred[k]["valid_bev"],
+                        batch.get(
+                            "map_mask",
+                            {
+                                k: torch.ones(
+                                    (pred[k]["features_map"][:, 0, ...].shape)
+                                ).to(pred[k]["valid_bev"])
+                            },
+                        )[k],
+                        delta_p / resolution,
+                        range_p / resolution,
+                        delta_r,
+                        range_r,
+                    )
+                )
+                if (
+                    model.model.conf.add_temperature
+                    and model.model.conf.apply_temperature
+                ):
+                    temp = torch.exp(-model.model.temperature[idx])
+                else:
+                    temp = 1.0
+                # convert pose scores to probabilities
+                pose_log_probs = torch.nn.functional.log_softmax(
+                    temp * pose_scores.flatten()
+                )
+                poses.append(map_T_cam_samples)
+                pose_scores_list.append(pose_log_probs)
+
+            # Sum up log probs. Then,
+            # chained_pose_scores = [pose_log_probs for pose_log_probs in pose_scores_list]
+            pose_scores_list = [
+                weight * score
+                for score, weight in zip(pose_scores_list, kwargs["chain_weights"])
+            ]
+            chained_pose_scores = torch.stack(pose_scores_list).sum(0)
+            _, best_idx = torch.max(chained_pose_scores, dim=-1)
+            map_T_cam_chain_refined = poses[0].squeeze(0)[best_idx].unsqueeze(0)
+
+            pred["chain_refined"] = {}
+            pred["chain_refined"]["map_T_cam_max"] = Transform2D(
+                map_T_cam_chain_refined
+            )
+            tile_T_cam_chain_refined = Transform2D.from_pixels(
+                Transform2D(map_T_cam_chain_refined), 1 / upsample_ppm
+            )
+            pred["chain_refined"]["tile_T_cam_max"] = tile_T_cam_chain_refined
+            batch["tile_T_cam"]["chain_refined"] = batch["tile_T_cam"][
+                model.model.conf.bev_mapper.z_max[0]
+            ]
+
+        results = metrics(pred, batch)
+        if do_prior:
+            prior_results = p_metrics(pred_256m, batch_256m)
+
+        # if not (results["xy_max_error_chain"] < 4 and results["xy_max_error_chain"] < results["xy_max_error_128"] < results["xy_max_error_32"]):
+        #     continue
+
+        # mining good examples for thesis
+        # if results["xy_max_error_chain"] > 10:
+        #     continue
+
+        # mine good examples
+        if not (
+            results["xy_max_error_chain"] < 2
+            and results["xy_max_error_chain"]
+            < results["xy_max_error_32"]
+            < results["xy_max_error_128"]
+        ):
+            continue
+
+        names += batch["name"]
+
+        if prior_model is not None:
+            if callback is not None:
+                callback(
+                    i,
+                    prior_model,
+                    unbatch_to_device(pred_256m),
+                    unbatch_to_device(batch_256m),
+                    prior_results,
+                    return_plots=True,
+                )
+        if callback is not None:
+            callback(
+                i,
+                model,
+                unbatch_to_device(pred),
+                unbatch_to_device(batch),
+                results,
+                return_plots=True,
+            )
+
+        del batch_, batch, pred, results
+
+    if prior_model is not None:
+        p_metrics = p_metrics.cpu().compute()
+        logger.info(f"Prior model results: {p_metrics}")
+    return metrics.cpu(), names
 
 
 def select_images_from_log(log_paths):
@@ -937,6 +1461,9 @@ def evaluate(
     callback: Optional[Callable] = None,
     num_workers: int = 1,
     viz_kwargs=None,
+    hierarchical: bool = False,
+    prior_model: str = None,
+    prior_model_cfg_path: str = None,
     **kwargs,
 ):
     if experiment in pretrained_models:
@@ -952,6 +1479,29 @@ def evaluate(
     if torch.cuda.is_available():
         model = model.cuda()
 
+    if prior_model is not None:
+        if prior_model_cfg_path is not None:
+            cfg_prior = OmegaConf.load(prior_model_cfg_path)
+        else:
+            cfg_prior = cfg
+        OmegaConf.resolve(cfg_prior)
+        if prior_model in pretrained_models:
+            prior_model, cfg_override_prior = pretrained_models[prior_model]
+            cfg_prior = OmegaConf.merge(
+                OmegaConf.create(dict(model=cfg_override_prior)), cfg_prior
+            )
+
+        logger.info(
+            "Evaluating model %s (PRIOR) with config %s", prior_model, cfg_prior
+        )
+        checkpoint_path = resolve_checkpoint_path(prior_model)
+        prior_model = GenericModule.load_from_checkpoint(
+            checkpoint_path, cfg=cfg_prior, find_best=not prior_model.endswith(".ckpt")
+        )
+        prior_model = prior_model.eval()
+        if torch.cuda.is_available():
+            prior_model = prior_model.cuda()
+
     dataset.prepare_data()
     dataset.setup()
 
@@ -959,10 +1509,7 @@ def evaluate(
     if output_dir is not None:
         output_dir.mkdir(exist_ok=True, parents=True)
         if callback is None and plot_images:
-            if sequential:
-                callback = plot_example_sequential
-            else:
-                callback = plot_example_single
+            callback = plot_example_single
             callback = functools.partial(
                 callback, out_dir=output_dir, return_plots=True, **(viz_kwargs or {})
             )
@@ -973,11 +1520,15 @@ def evaluate(
             kwargs.get("select_images_from_logs")
         )
     seed_everything(dataset.cfg.seed)
-    if sequential:
-        dset, chunk2idx = dataset.sequence_dataset(split, **cfg.chunking)
-        metrics = evaluate_sequential(dset, chunk2idx, model, **kwargs)
+
+    loader = dataset.dataloader(split, shuffle=True, num_workers=num_workers)
+    if hierarchical:
+        # dset, chunk2idx = dataset.sequence_dataset(split, **cfg.chunking)
+        # metrics = evaluate_sequential(dset, chunk2idx, model, **kwargs)
+        metrics, names = evaluate_hierarchical(
+            loader, model, prior_model=prior_model, **kwargs
+        )
     else:
-        loader = dataset.dataloader(split, shuffle=True, num_workers=num_workers)
         metrics, names = evaluate_single_image(loader, model, **kwargs)
 
     results = metrics.compute()
