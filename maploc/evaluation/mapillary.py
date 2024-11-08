@@ -85,12 +85,13 @@ def run(
         cfgs = [cfg]
         dataset = MapillaryDataModule(cfg.get("data", {}))
 
-    if not kwargs["chain"]:
+    if kwargs["chain"]:
+        metrics = evaluate_chain(experiment, cfgs, dataset, split, **kwargs)
+
+    else:
         metrics = evaluate(
             experiment[0], cfgs[0], dataset, split, sequential=sequential, **kwargs
         )
-    else:
-        metrics = evaluate_chain(experiment, cfgs, dataset, split, **kwargs)
 
     keys = [
         "xy_max_error",
@@ -124,10 +125,9 @@ if __name__ == "__main__":
     parser.add_argument("--select_images_from_logs", nargs="*", type=Path)
     parser.add_argument("--cfg_path", nargs="*", type=Path)
     parser.add_argument("--chain", action="store_true")
+    parser.add_argument("--hierarchical", action="store_true")
     parser.add_argument("--singlemodel_randomscale", action="store_true")
-    parser.add_argument(
-        "--chain_weights", nargs="+", type=str, default=['1', '1', '1']
-    )
+    parser.add_argument("--chain_weights", nargs="+", type=str, default=["1", "1", "1"])
     parser.add_argument("--fig_for_paper", action="store_true")
     parser.add_argument("dotlist", nargs="*")
     args = parser.parse_args()
@@ -148,5 +148,6 @@ if __name__ == "__main__":
         chain=args.chain,
         chain_weights=chain_weights,
         singlemodel_randomscale=args.singlemodel_randomscale,
-        viz_kwargs=dict(fig_for_paper=args.fig_for_paper)
+        viz_kwargs=dict(fig_for_paper=args.fig_for_paper, show_gps=True),
+        hierarchical=args.hierarchical,
     )
