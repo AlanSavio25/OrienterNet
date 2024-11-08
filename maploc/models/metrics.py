@@ -61,15 +61,23 @@ class AngleRecall(torchmetrics.MeanMetric):
         super().update((error <= self.threshold).float())
 
 
-class MeanMetricWithRecall(torchmetrics.Metric):
+class MetricWithRecall(torchmetrics.Metric):
     full_state_update = True
 
-    def __init__(self):
+    def __init__(self, metric="mean"):
         super().__init__()
+        self.metric = metric
         self.add_state("value", default=[], dist_reduce_fx="cat")
 
     def compute(self):
-        return dim_zero_cat(self.value).mean(0)
+        if self.metric == "mean":
+            return dim_zero_cat(self.value).mean(0)
+        elif self.metric == "median":
+            return dim_zero_cat(self.value).median(0).values
+        else:
+            raise ValueError(
+                f"MetricWithRecall accepts either mean or median. Received: {self.metric}"
+            )
 
     def get_errors(self):
         return dim_zero_cat(self.value)
@@ -80,7 +88,7 @@ class MeanMetricWithRecall(torchmetrics.Metric):
         return (error.unsqueeze(-1) < thresholds).float().mean(0) * 100
 
 
-class ExhaustiveEntropy(MeanMetricWithRecall):
+class ExhaustiveEntropy(MetricWithRecall):
     def __init__(self, key="log_probs", subkey=None, *args, **kwargs):
         self.key = key
         self.subkey = subkey
@@ -101,9 +109,9 @@ class ExhaustiveEntropy(MeanMetricWithRecall):
         # super().update(norm_entropy.float())
 
 
-class AngleError(MeanMetricWithRecall):
-    def __init__(self, key, subkey=None):
-        super().__init__()
+class AngleError(MetricWithRecall):
+    def __init__(self, key, subkey=None, metric="mean"):
+        super().__init__(metric)
         self.key = key
         self.subkey = subkey
 
@@ -121,9 +129,9 @@ class AngleError(MeanMetricWithRecall):
             self.value.append(value)
 
 
-class Location2DError(MeanMetricWithRecall):
-    def __init__(self, key, subkey=None):
-        super().__init__()
+class Location2DError(MetricWithRecall):
+    def __init__(self, key, subkey=None, metric="mean"):
+        super().__init__(metric)
         self.key = key
         self.subkey = subkey
 
@@ -145,8 +153,8 @@ class Location2DError(MeanMetricWithRecall):
             self.value.append(value)
 
 
-class LateralLongitudinalError(MeanMetricWithRecall):
-    def __init__(self, key="tile_T_cam_max", subkey=None):
+class LateralLongitudinalError(MetricWithRecall):
+    def __init__(self, key="tile_T_cam_max", subkey=None, metric="mean"):
         super().__init__()
         self.key = key
         self.subkey = subkey
