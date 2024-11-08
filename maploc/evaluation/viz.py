@@ -3,6 +3,7 @@
 from collections import defaultdict
 import io
 
+from matplotlib.patches import Rectangle
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
@@ -185,7 +186,7 @@ def plot_example_single(
         fig = plt.gcf()
         axes = fig.axes
         for map_idx in range(len(maps_viz)):
-            axes[map_idx].images[0].set_interpolation("none")
+            axes[map_idx + 1].images[0].set_interpolation("none")
 
         Colormap.add_colorbar()
 
@@ -263,6 +264,28 @@ def plot_example_single(
             refactored=True,
             scale=side / 256,
         )
+
+        # if "special_points" in pred[k]: # debugging plots
+        #     plot_pose(
+        #         maps_to_draw_on,
+        #         pred[k]["special_points"].reshape(-1, 2).T,
+        #         c="green",
+        #         refactored=True,
+        #         scale=side / 256,
+        #     )
+
+        # plot topk tiles
+        if "topk" in pred[k]:
+            topk_list = pred[k]["topk"]
+            for map_idx in np.array(maps_to_draw_on) + 1:
+                for topk in topk_list:
+                    rect = Rectangle(
+                        *topk, linewidth=0.5, edgecolor="black", facecolor="none"
+                    )
+                    ax = axes[map_idx]
+                    ax.set_xlim(ax.get_xlim())
+                    ax.set_ylim(ax.get_ylim())
+                    ax.add_patch(rect)
 
         plot_dense_rotations(
             len(maps_viz) + 1, lp_ijt.exp(), refactored=True, scale=side / 256
