@@ -161,7 +161,7 @@ def preprocess_inputs(
     return image, camera, (roll, pitch), proj, bbox  # , latlon
 
 
-pretrained_models = dict(
+PRETRAINED_MODELS = dict(
     OrienterNet_MGL=("orienternet_mgl.ckpt", dict(num_rotations=256)),
     OrienterNetv2=("orienternetv2.ckpt", dict(num_rotations=256)),
     OrienterNetv2_with_satellite=(
@@ -179,14 +179,14 @@ class OrienterNetv2:
 
     def __init__(
         self,
-        experiment_or_path: Optional[str] = "OrienterNet_MGL",
+        experiment_or_path: Optional[str] = "OrienterNetv2",
         prior_exp_or_path: Optional[str] = "coarse_prior",
         device=None,
         **kwargs,
     ):
 
-        if experiment_or_path in pretrained_models:
-            path = pretrained_models[experiment_or_path][0]
+        if experiment_or_path in PRETRAINED_MODELS:
+            path = PRETRAINED_MODELS[experiment_or_path][0]
         else:
             path = experiment_or_path
 
@@ -721,52 +721,6 @@ class OrienterNetv2:
         data["semantic_map"][f_z] = data["semantic_map"]["chain"] = fraster
         pred["chain"]["features_map"] = pred[f_z]["features_map"]
 
-        # logger.info("Arrived!!")
-        # exit()
-
-        # with torch.no_grad():
-        #     pred = self.model(data_)
-
-        # xy_gps = canvas[z_max_list[0]].bbox.center
-        # uv_gps = torch.from_numpy(canvas.to_uv(xy_gps))
-
-        # lp_xyr = pred["log_probs"].squeeze(0)
-        # tile_size = canvas.bbox.size.min() / 2
-        # sigma = tile_size - 20  # 20 meters margin
-        # lp_xyr = fuse_gps(
-        #     lp_xyr,
-        #     uv_gps.to(lp_xyr),
-        #     self.config.model.pixel_per_meter,
-        #     sigma=sigma,
-        # )
-        # xyr = argmax_xyr(lp_xyr).cpu()
-
-        # Chain log_probs of 32m and 128m branches
-        # scores = [pred[k]["scores"].to("cpu") for k in self.config.data.z_max]
-
-        # fine_num_pixels = max([score_volume.shape[-2] for score_volume in scores])
-        # upsample_ppm = max(self.config.data.pixel_per_meter)
-        # h = w = fine_num_pixels
-        # scores = [
-        #     torch.nn.functional.interpolate(
-        #         score.moveaxis(-1, -3), size=(int(h), int(w)), mode="bilinear"
-        #     ).moveaxis(-3, -1)
-        #     for score in scores
-        # ]
-        # log_probs = [log_softmax_spatial(score) for score in scores]
-        # log_probs_chained = log_softmax_spatial(torch.stack(log_probs).sum(0))
-        # probs_chained = log_probs_chained.exp().cpu()
-        # del scores, log_probs
-
-        # uvr_max = argmax_xyr(log_probs_chained)
-        # ij_max = torch.flip(uvr_max[..., :2], dims=[-1])
-        # yaw_max = 180 - uvr_max[..., -1]
-        # map_T_max = Transform2D.from_degrees(yaw_max.unsqueeze(-1), ij_max)
-
-        # tile_T_cam_max_chained = (
-        #     Transform2D.from_pixels(map_T_max, 1 / upsample_ppm)
-        # ).cpu()
-
         if use_prior:
             data["semantic_map"][p_z] = data_prior["semantic_map"][p_z]
             pred[p_z] = pred_prior[p_z]
@@ -778,6 +732,7 @@ class OrienterNetv2:
         image_path="assets/query_vancouver_1.jpeg",
         prior_address="Vancouver Waterfront Station",
         tile_size_meters=128,
+        plot=True,
         out_dir=None,
         hierarchical=False,
         topk=None,
@@ -812,13 +767,14 @@ class OrienterNetv2:
             )
 
         logger.info("Inference complete. Preparing visualizations...")
-        plot_results(data, pred, out_dir, image_path)
+        plots = plot_results(data, pred, out_dir, image_path)
         logger.info(f"Visualizations saved to {out_dir}")
-        return
+        return plots
 
 
 def plot_results(data, pred, out_dir=None, image_path=None):
 
+    plots = {}
     keys = [key for key in pred.keys() if isinstance(key, float)]
     print(f"Keys: {keys}")
     keys += ["chain"] if "chain" in pred.keys() else []
@@ -874,15 +830,17 @@ def plot_results(data, pred, out_dir=None, image_path=None):
                 s=side / 256,
             )
 
-        if out_dir is None:
-            plt.show()
-        else:
+        plots[k] = plt.gcf()
+
+        # if out_dir is None:
+            # plt.show()
+        if out_dir is not None:
             Path(out_dir).mkdir(exist_ok=True, parents=True)
             p = str(Path(out_dir) / Path(image_path).stem) + f"_{k}_{{}}.png"
             save_plot(p.format("pred"))
             plt.close()
 
-    return
+    return plots
 
 
 if __name__ == "__main__":
@@ -900,6 +858,6 @@ if __name__ == "__main__":
         topk=1,
     )
 
-
 # TODO List:
 # add topk visualization
+# pad the image correctly
