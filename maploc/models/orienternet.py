@@ -30,6 +30,7 @@ from .voting import (
 
 
 class OrienterNet(BaseModel):
+    # TODO: change this to orienternet v2
     default_conf = {
         "image_encoder": "???",
         # "semantic_encoder": "???",

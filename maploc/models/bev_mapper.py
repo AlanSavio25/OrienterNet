@@ -288,7 +288,6 @@ class BEVMapper(BaseModel):
         # Extract image features.
         level = 0
         f_image = self.image_encoder(data)["feature_maps"][level]
-
         camera = data["camera"].scale(1 / self.image_encoder.scales[level])
         camera = camera.to(data["image"].device, non_blocking=True)
 
@@ -345,7 +344,7 @@ class BEVMapper(BaseModel):
 
         elif self.conf.mode == "inverse":  # SNAP's BEV
 
-            tile_T_cam = data["tile_T_cam"]
+            # tile_T_cam = data["tile_T_cam"]
             cam_R_gcam = data["cam_R_gcam"]
 
             # Build 3D grid in front of camera. The coordinates are gcam coordinates
@@ -371,7 +370,7 @@ class BEVMapper(BaseModel):
 
                 xy = self.cam_xy_pts[i]
                 if len(xy.shape) != 4:
-                    xy = xy[None].repeat_interleave(tile_T_cam[k].shape[0], dim=0)
+                    xy = xy[None].repeat_interleave(data["image"].shape[0], dim=0)
 
                 z_offset = -torch.tensor(4)  # Set the camera at height = 4m
 
