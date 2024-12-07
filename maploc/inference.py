@@ -1,6 +1,7 @@
 """Interface for OrienterNetv2 inference"""
 
-print("starting to infer")
+import pickle
+import os
 from maploc.osm.tiling import TileManager
 from maploc.utils.viz_localization import (
     likelihood_overlay,
@@ -8,7 +9,7 @@ from maploc.utils.viz_localization import (
     add_circle_inset,
 )
 from maploc.utils.viz_2d import features_to_RGB
-from maploc.osm.viz import Colormap, plot_nodes
+from maploc.osm.viz import Colormap, GeoPlotter, plot_nodes
 from maploc.utils.viz_2d import plot_images
 
 
@@ -49,12 +50,16 @@ try:
 except ImportError:
     geolocator = None
 
+
+READ_TILE_FROM_FILE = True
+AACHEN_CACHE = True
+
+
 try:
     from gradio_client import Client, handle_file
 
     # logger.info("Loading GeoCalib model...")
     # calibrator = Client("veichta/GeoCalib")
-    # calibrator = torch.hub.load("cvg/GeoCalib", "GeoCalib", trust_repo=True, verbose=True)
     calibrator = None
 except (ImportError, ValueError):
     calibrator = None
@@ -105,6 +110,7 @@ def preprocess_inputs(
     prior_address: Optional[str] = None,
     fov: Optional[float] = None,
     tile_size_meters: int = 64,
+    calibrate=True
 ):
     """Read image, estimate camera calibration, prepare map tile"""
 
@@ -140,12 +146,12 @@ def preprocess_inputs(
         )
     latlon = np.array(latlon)
 
-    if calibrator is not None:
+    if calibrator is not None and calibrate:
         roll, pitch, fov = image_calibration(image_path)
         logger.info("Using (roll, pitch, fov) %s, %s, %s.", roll, pitch, fov)
     else:
         roll, pitch = None, None
-        logger.info("No estimated roll and pitch")
+        logger.info("Not estimating roll and pitch.")
 
     # logger.info("Using cam_R_gcam %s.", cam_R_gcam)
 
@@ -200,7 +206,7 @@ class OrienterNetv2:
             CHECKPOINT_URL = "https://github.com/AlanSavio25/OrienterNet/releases/download/releasev1.0/orienternetv2.ckpt"
             torch.hub.download_url_to_file(CHECKPOINT_URL, path)
 
-        ckpt = torch.load(path, map_location=(lambda storage, loc: storage))
+        ckpt = torch.load(path, map_location=(lambda storage, loc: storage), weights_only=False)
         config = ckpt["hyper_parameters"]
         config.model.update(kwargs)
         config.model.image_encoder.backbone.pretrained = False
@@ -217,8 +223,8 @@ class OrienterNetv2:
         self.device = device
 
         if prior_exp_or_path is not None:
-            if prior_exp_or_path in pretrained_models:
-                path = pretrained_models[prior_exp_or_path][0]
+            if prior_exp_or_path in PRETRAINED_MODELS:
+                path = PRETRAINED_MODELS[prior_exp_or_path][0]
             else:
                 path = prior_exp_or_path
 
@@ -232,7 +238,7 @@ class OrienterNetv2:
                 CHECKPOINT_URL = "https://github.com/AlanSavio25/OrienterNet/releases/download/releasev1.0/coarse_prior.ckpt"
                 torch.hub.download_url_to_file(CHECKPOINT_URL, path)
 
-            p_ckpt = torch.load(path, map_location=(lambda storage, loc: storage))
+            p_ckpt = torch.load(path, map_location=(lambda storage, loc: storage), weights_only=False)
             p_config = p_ckpt["hyper_parameters"]
             # p_config.model.update(kwargs)
             # p_config.model.image_encoder.backbone.pretrained = False
@@ -244,9 +250,13 @@ class OrienterNetv2:
 
             self.prior_model = p_model
             self.prior_config = p_config
+            self.use_prior = True
         else:
             self.prior_model = None
             self.prior_config = None
+            self.use_prior = False
+
+            
 
         logger.info(
             f"Initialized OrienterNetv2 {'(with prior)' if self.prior_model is not None else ''}."
@@ -266,7 +276,7 @@ class OrienterNetv2:
         """Process image and prepare map raster for model inference"""
 
         logger.info(f"Preparing data for localization...")
-        assert image.shape[:2][::-1] == tuple(camera.size.tolist())
+        assert image.shape[:2][::-1] == tuple(camera.size.round().int().tolist())
         target_focal_length = self.config.data.resize_image / 2
         factor = target_focal_length / camera.f
         size = (camera.size * factor).round().int()
@@ -295,23 +305,40 @@ class OrienterNetv2:
             ppm_list = self.config.data.pixel_per_meter
             zmax_list = self.config.data.z_max
         else:
-            if self.prior_config is not None:
+            if self.use_prior:
                 ppm_list = self.prior_config.data.pixel_per_meter
                 zmax_list = self.prior_config.data.z_max
             else:
                 ppm_list = self.config.data.pixel_per_meter[-1:]  # coarsest ppm
                 zmax_list = self.config.data.z_max[-1:]
 
-        all_zmax = self.config.data.z_max + self.prior_config.data.z_max
+        all_zmax = self.config.data.z_max + (self.prior_config.data.z_max if self.prior_config else [])
         all_ppm = (
-            self.config.data.pixel_per_meter + self.prior_config.data.pixel_per_meter
+            self.config.data.pixel_per_meter + (self.prior_config.data.pixel_per_meter if self.prior_config else [])
         )
         canvas = {key: None for key in all_zmax}
         tilers = {}
 
         for i, z_max in enumerate(all_zmax):
             ppm = all_ppm[i]
-            tiler = TileManager.from_bbox(proj, bbox + 10, ppm)
+            
+            path = Path(f"cached_tiles/tiles_cache_{z_max}{'_aachencathedral256' if AACHEN_CACHE else 'defaultcache'}.pkl")
+            if READ_TILE_FROM_FILE and path.exists():
+                tiler = TileManager.load(path)
+                print(f"Found tile file and loaded!")
+            else:
+                print("File not found. Loading from OSM...")
+                tiler = TileManager.from_bbox(proj, bbox + 10, ppm)
+                tiler.save(path)
+                print(f"Saved to path: {path}")
+
+                
+                # assert that it exists already
+
+                # if it doesn't save it to 
+
+
+                
             tilers[z_max] = tiler
             if z_max in zmax_list:
                 canvas[z_max] = tiler.query(bbox)
@@ -344,12 +371,16 @@ class OrienterNetv2:
 
     @torch.no_grad()
     def localize(self, data: dict, **kwargs):
-        data_ = apply_to_collection(data, (torch.Tensor, Camera), lambda x: x[None])
+        data = apply_to_collection(data, (torch.Tensor, Camera), lambda x: x[None])
+        data = move_data_to_device(data, self.device)
         # data_ = {k: v.to(self.device)[None] for k, v in data.items() if isinstance(v, torch.Tensor)}
 
         with torch.no_grad():
-            pred = self.model(data_)
+            pred = self.model(data)
 
+        f_z = min(self.config.data.z_max)
+        c_z = max(self.config.data.z_max)
+        
         # Chain log_probs of 32m and 128m branches
         scores = [pred[k]["scores"].to("cpu") for k in self.config.data.z_max]
 
@@ -363,67 +394,80 @@ class OrienterNetv2:
             for score in scores
         ]
 
+    
         log_probs = [log_softmax_spatial(score) for score in scores]
         log_probs_chained = log_softmax_spatial(torch.stack(log_probs).sum(0))
         probs_chained = log_probs_chained.exp().cpu()
+
         del scores, log_probs
 
         uvr_max = argmax_xyr(log_probs_chained)
         ij_max = torch.flip(uvr_max[..., :2], dims=[-1])
         yaw_max = 180 - uvr_max[..., -1]
-        map_T_max = Transform2D.from_degrees(yaw_max.unsqueeze(-1), ij_max)
-
+        map_T_cam_max_chained = Transform2D.from_degrees(yaw_max.unsqueeze(-1), ij_max)
         tile_T_cam_max_chained = (
-            Transform2D.from_pixels(map_T_max, 1 / upsample_ppm)
+            Transform2D.from_pixels(map_T_cam_max_chained, 1 / upsample_ppm)
         ).cpu()
 
-        f_map_fine = pred[32.0]["features_map"].cpu()
-        image = data["image"].cpu()  # padded/rectified image
-        semantic_map = data["semantic_map"]  # this contains the memory-layout raster
+        # f_map_fine = pred[32.0]["features_map"].cpu()
+        # image = data["image"].cpu()  # padded/rectified image
+        # semantic_map = data["semantic_map"]  # this contains the memory-layout raster
+        # max_score = (fscores + cmap_interp).flatten(-3).max(-1).values
 
-        return (
-            tile_T_cam_max_chained,
-            map_T_max,
-            probs_chained,
-            f_map_fine,
-            image,
-            semantic_map,
-            pred,
-        )
-        return
+        pred['chain'] = {
+                "tile_T_cam_max": tile_T_cam_max_chained,
+                "map_T_cam_max": map_T_cam_max_chained,
+                "max_score": 0, #max_score,
+                "log_probs": log_probs_chained,
+                "features_map": pred[f_z]["features_map"]
+        }
+        # data["semantic_map"][f_z] = data["semantic_map"]["chain"] = fraster
+
+        # Change all tile_T_cam_max to the chain's
+        c_ppm = self.model.conf.pixel_per_meter[-1]
+        pred[c_z]["tile_T_cam_max"] = tile_T_cam_max_chained.cpu()
+        pred[c_z]["map_T_cam_max"] = Transform2D.to_pixels(tile_T_cam_max_chained.cpu(), 1 / c_ppm)
+
+        return pred
+
 
     @torch.no_grad()
     def localize_hierarchical(self, data: dict, topk: int, **kwargs):
 
         # data = self.prepare_inputs(image, camera, canvas, **kwargs)
         data = apply_to_collection(data, (torch.Tensor, Camera), lambda x: x[None])
+        data = move_data_to_device(data, self.device)
 
         # decide whether prior should be used or not.
         # we use the prior only when the search region is too large.
-        width = [v.bbox.size[0] for k, v in data["canvas"].items() if v is not None][0]
-        min_threshold = 512  # m
-        if width > min_threshold:
-            use_prior = True
+        # width = [v.bbox.size[0] for k, v in data["canvas"].items() if v is not None][0]
+        # min_threshold = 512  # m
+        # if width > min_threshold:
+        #     self.use_prior = True
+        #     p_ppm = self.prior_model.conf.pixel_per_meter[0]
+        #     p_z = self.prior_model.conf.bev_mapper.z_max[0]
+        #     assert (
+        #         self.prior_model is not None
+        #     ), f"Prior model required when Tile width ({width}) is > threshold {threshold}."
+        # else:
+        #     self.use_prior = False
+
+        if self.use_prior:
             p_ppm = self.prior_model.conf.pixel_per_meter[0]
             p_z = self.prior_model.conf.bev_mapper.z_max[0]
-            assert (
-                self.prior_model is not None
-            ), f"Prior model required when Tile width ({width}) is > threshold {threshold}."
-        else:
-            use_prior = False
 
         f_ppm, c_ppm = self.model.conf.pixel_per_meter
         f_z, c_z = self.model.conf.bev_mapper.z_max
 
         # config
-        num_k_coarse = topk if use_prior else 1
-        num_k_fine = topk if not use_prior else 1
+        num_k_coarse = topk if self.use_prior else 1
+        num_k_fine = topk if not self.use_prior else 1
         csm_coarse = 256
         csm_fine = 64
 
         # pmap_crad is radius of a cmap in pmap coords
         # for masking - NMS
-        pmap_crad = csm_coarse * p_ppm if use_prior else None
+        pmap_crad = csm_coarse * p_ppm if self.use_prior else None
         cmap_frad = csm_fine * c_ppm
 
         topk_poses_fine = []
@@ -431,7 +475,7 @@ class OrienterNetv2:
 
         logger.info(f"Running inference...")
 
-        if use_prior:
+        if self.use_prior:
             data_prior = disable_key(data, [f_z, c_z], remove_key=True)
             pred_prior = self.prior_model(data_prior)
             pscores = pred_prior[p_z]["scores"].clone()
@@ -446,8 +490,9 @@ class OrienterNetv2:
         for k_idx_coarse in range(num_k_coarse):
 
             data_coarse = disable_key(data, [f_z])
-            data_coarse = disable_key(data, [p_z], remove_key=True)
-            if not use_prior:
+            if self.use_prior:
+                data_coarse = disable_key(data, [p_z], remove_key=True)
+            if not self.use_prior:
                 ccanvas = None
                 craster = None
                 bbox_ctile = data_coarse["canvas"][c_z].bbox
@@ -591,7 +636,8 @@ class OrienterNetv2:
                 fraster = torch.rot90(fraster, -1, dims=(-2, -1))
 
                 data_fine = disable_key(data, [c_z])
-                data_fine = disable_key(data, [p_z], remove_key=True)
+                if self.use_prior:
+                    data_fine = disable_key(data, [p_z], remove_key=True)
                 data_fine["semantic_map"][f_z] = fraster.unsqueeze(0).to(self.device)
 
                 cmap_min = Transform2D.to_pixels(
@@ -685,12 +731,19 @@ class OrienterNetv2:
                         craster,
                         bbox_ctile,
                         c_topk_coords,
+                        ctile_T_ptile if self.use_prior else None,
+                        ctile_T_ftile
                     )
                 )
             # Reset the cache for the next forward pass
             bev_cache_fine = None
 
         bev_cache_coarse = None
+
+        # Reset model defaults
+        with read_write(self.model.bev_mapper.conf):
+            self.model.bev_mapper.conf.z_max[0] = f_z
+            self.model.bev_mapper.conf.z_max[1] = c_z
 
         # Select best pose out of topk
         (
@@ -702,6 +755,8 @@ class OrienterNetv2:
             craster,
             bbox_ctile,
             c_topk_coords,
+            ctile_T_ptile,
+            ctile_T_ftile
         ) = max(topk_poses_fine, key=lambda x: x[0]["chain"]["max_score"])
 
         pred = {}
@@ -709,21 +764,36 @@ class OrienterNetv2:
         pred[c_z] = best_pred[c_z]
         pred[f_z] = best_pred[f_z]
         pred["chain"] = best_pred["chain"]
+        
 
-        if use_prior:
+        if self.use_prior:
             pred_prior[p_z]["topk"] = p_topk_coords
 
         pred[c_z]["topk"] = c_topk_coords
 
-        if use_prior:
+        if self.use_prior:
             data["semantic_map"][c_z] = craster
 
         data["semantic_map"][f_z] = data["semantic_map"]["chain"] = fraster
         pred["chain"]["features_map"] = pred[f_z]["features_map"]
 
-        if use_prior:
+        if self.use_prior:
             data["semantic_map"][p_z] = data_prior["semantic_map"][p_z]
             pred[p_z] = pred_prior[p_z]
+
+        # Change all tile_T_cam_max to the chain's
+        ftile_T_maxcam = pred['chain']['tile_T_cam_max']
+        pred[c_z]["tile_T_cam_max"] = ctile_T_maxcam = ctile_T_ftile.cpu() @ ftile_T_maxcam.cpu()
+        pred[c_z]["map_T_cam_max"] = Transform2D.to_pixels(ctile_T_maxcam.cpu(), 1 / c_ppm)
+        if self.use_prior:
+            pred[p_z]["tile_T_cam_max"] = ptile_T_maxcam = ctile_T_ptile.inv().cpu() @ ctile_T_maxcam.cpu()
+            pred[p_z]["map_T_cam_max"] = Transform2D.to_pixels(ptile_T_maxcam.cpu(), 1 / p_ppm)
+            pred[p_z]['scores'] = pred_prior[p_z]['scores']
+            
+
+        
+        
+        
 
         return (data, pred)
 
@@ -732,7 +802,6 @@ class OrienterNetv2:
         image_path="assets/query_vancouver_1.jpeg",
         prior_address="Vancouver Waterfront Station",
         tile_size_meters=128,
-        plot=True,
         out_dir=None,
         hierarchical=False,
         topk=None,
@@ -746,7 +815,22 @@ class OrienterNetv2:
             image_path,
             prior_address=prior_address,
             tile_size_meters=tile_size_meters,  # try 64, 256, etc.
+            calibrate=True
         )
+
+        width = bbox.size[0]
+        PRIOR_THRESHOLD = 512  # m
+        if width > PRIOR_THRESHOLD:
+            self.use_prior = True
+            # p_ppm = self.prior_model.conf.pixel_per_meter[0]
+            # p_z = self.prior_model.conf.bev_mapper.z_max[0]
+            # assert (
+            #     self.prior_model is not None
+            # ), f"Prior model required when Tile width ({width}) is > threshold {threshold}."
+        else:
+            self.use_prior = False
+        
+        
         data = self.prepare_inputs(
             image, camera, proj, bbox, hierarchical, roll_pitch=roll_pitch
         )
@@ -754,93 +838,169 @@ class OrienterNetv2:
         if hierarchical:
             data, pred = self.localize_hierarchical(data, topk)
         else:
-            (
-                tile_T_cam_max,
-                map_T_cam_max,
-                prob,
-                neural_map,
-                image,
-                semantic_map,
-                pred,
-            ) = self.localize(
-                data,
-            )
-
+            pred = self.localize(data)
+        
         logger.info("Inference complete. Preparing visualizations...")
-        plots = plot_results(data, pred, out_dir, image_path)
+        plots = self.plot_results(data, pred, proj, out_dir, image_path)
         logger.info(f"Visualizations saved to {out_dir}")
         return plots
 
 
-def plot_results(data, pred, out_dir=None, image_path=None):
+    def plot_results(self, data, pred, proj=None, out_dir=None, image_path=None):
 
-    plots = {}
-    keys = [key for key in pred.keys() if isinstance(key, float)]
-    print(f"Keys: {keys}")
-    keys += ["chain"] if "chain" in pred.keys() else []
+        data = move_data_to_device(data, 'cpu')
+        pred = move_data_to_device(pred, 'cpu')
 
-    for index, k in enumerate(keys):
+        plt.close('all')
+        plots = {}
+        
+        # Plot Inputs
+        f_z, c_z = self.model.bev_mapper.conf.z_max
+        if self.use_prior:
+            p_z = self.prior_model.bev_mapper.conf.z_max[0]
+        
+        image = data["image"].squeeze(0).permute(1, 2, 0)
+        map_viz = Colormap.apply(data["semantic_map"][p_z if self.use_prior else c_z].squeeze(0))
+        map_viz = np.swapaxes(map_viz, 0, 1)
+        plot_images([image, map_viz],
+                    titles=["input image", "Input map"],
+                    origins=["upper", "lower"])
+        
+        plt.subplots_adjust(top=0.95)
+        inputs_plot = plt.gcf()
 
-        lp_ijt = pred[k]["log_probs"]
-        assert lp_ijt.device != "cuda"
-        prob = lp_ijt.exp()
-        # depth32m = self.config.data.z_max[0]  # corresponds to finer ppm
-        # Get the memory-layout map raster from localize() output
-        map_viz = Colormap.apply(data["semantic_map"][k].squeeze(0))
-        if tuple(prob.shape) != tuple(map_viz.shape[:2]):
-            map_viz = (
-                torch.nn.functional.interpolate(
-                    torch.from_numpy(map_viz).moveaxis(-1, -3).unsqueeze(0),
-                    size=tuple(prob.shape[-3:-1]),
+        # Plot output
+        # [full semantic map with arrow, 
+        # prior overlay with prior and arrow,
+        # coarse overlay with prior and arrow,
+        # fine overlay with prior and arrrow,
+        # neural map
+        # ]
+        if "chain" not in data['semantic_map']:
+            data['semantic_map']['chain'] = data['semantic_map'][32.0]
+
+        # keys = [key for key in pred.keys() if isinstance(key, float)]
+        # keys += ["chain"] if "chain" in pred.keys() else []
+
+        keys = ([p_z] if self.use_prior else []) + [c_z, "chain"]
+
+        
+        for index, k in enumerate(keys):
+            lp_ijt = pred[k]["log_probs"]
+            prob = lp_ijt.exp()
+            map_viz = Colormap.apply(data["semantic_map"][k].squeeze(0))
+            if tuple(prob.shape) != tuple(map_viz.shape[:2]):
+                map_viz = (
+                    torch.nn.functional.interpolate(
+                        torch.from_numpy(map_viz).moveaxis(-1, -3).unsqueeze(0),
+                        size=tuple(prob.shape[-3:-1]),
+                    )
+                    .squeeze(0)
+                    .moveaxis(-3, -1)
+                    .numpy()
                 )
-                .squeeze(0)
-                .moveaxis(-3, -1)
-                .numpy()
+            # (neural_map_rgb,) = features_to_RGB(pred[k]["features_map"].squeeze(0).numpy())
+            # neural_map_rgb = np.swapaxes(x, 0, 1)
+            overlay = likelihood_overlay(
+                prob.squeeze(0).numpy().max(-1), map_viz.mean(-1, keepdims=True)
             )
-        (neural_map_rgb,) = features_to_RGB(pred[k]["features_map"].squeeze(0).numpy())
-        overlay = likelihood_overlay(
-            prob.squeeze(0).numpy().max(-1), map_viz.mean(-1, keepdims=True)
-        )
-        overlay, neural_map_rgb, map_viz = [
-            np.swapaxes(x, 0, 1) for x in (overlay, neural_map_rgb, map_viz)
-        ]
+            overlay = np.swapaxes(overlay, 0, 1)
+            if index == 0:
+                output = [np.swapaxes(map_viz, 0, 1)]
+            output.append(overlay)
+        (neural_map_rgb,) = features_to_RGB(pred[keys[-1]]["features_map"].squeeze(0).numpy())
+        neural_map_rgb = np.swapaxes(neural_map_rgb, 0, 1)
+        output.append(neural_map_rgb)
+    
+        # TODO: remove the image from here. (and change index from below)
         plot_images(
-            [
-                data["image"].squeeze(0).permute(1, 2, 0),
-                map_viz,
-                overlay,
-                neural_map_rgb,
-            ],
-            titles=["input image", "OpenStreetMap raster", "prediction", "neural map"],
-            origins=["upper", "lower", "lower", "lower"],
+            [image] + output,
+            titles=["Image"] + ["Map"] +  (["Prior likelihood"] if self.use_prior else []) + ["Coarse likelihood", "Fine Likelihood", "Neural Map"],
+            origins=['upper'] + ["lower"]*len(output),
+            # output,
+            # titles=["Map"] +  (["Prior likelihood"] if self.use_prior else []) + ["Coarse likelihood", "Fine Likelihood", "Neural Map"],
+            # origins=["lower"]*len(output),
         )
+        plt.subplots_adjust(top=0.95)
+        
         axes = plt.gcf().axes
-        ax = axes[2]
-        # ax.scatter(*data['canvas'][32.0].to_uv(bbox.center), s=5, c="red")
-        plot_dense_rotations(ax, prob.squeeze(0), w=0.005, s=1 / 25)
-        if k in [32.0, "chain"]:
-            side = map_viz.shape[0]
+        for index, k in enumerate(keys):
+            tile_T_cam_max = pred[k]['tile_T_cam_max']
+            ax = axes[index+2]
+            side = output[index+2].shape[0]
+            # plot_dense_rotations(ax, pred[k]["log_probs"].exp().squeeze(0), w=0.005, s=side / 256)
+            # if k in [32.0, "chain"]:
             plot_pose(
-                [1],
+                ax,
                 pred[k]["map_T_cam_max"].t.squeeze(0),
                 pred[k]["map_T_cam_max"].angle.squeeze(0),
                 c="k",
                 refactored=True,
                 dot=False,
-                s=side / 256,
+                # s=side / 256,
             )
 
-        plots[k] = plt.gcf()
+            
+        outputs_plot = plt.gcf()
+        # for index, k in enumerate(keys):
+            # plot_images(
+            #     [
+            #         # data["image"].squeeze(0).permute(1, 2, 0),
+            #         map_viz,
+            #         overlay,
+            #         neural_map_rgb,
+            #     ],
+            #     titles=["OpenStreetMap raster", "prediction", "neural map"],
+            #     origins=["lower", "lower", "lower"],
+            # )
+            # axes = plt.gcf().axes
+            # ax = axes[index+1]
+            # # ax.scatter(*data['canvas'][32.0].to_uv(bbox.center), s=5, c="red")
+            # side = map_viz.shape[0]
+            # plot_dense_rotations(ax, prob.squeeze(0), w=0.005, s=side / 256)
+            # if k in [32.0, "chain"]:
+            #     plot_pose(
+            #         [0],
+            #         pred[k]["map_T_cam_max"].t.squeeze(0),
+            #         pred[k]["map_T_cam_max"].angle.squeeze(0),
+            #         c="k",
+            #         refactored=True,
+            #         dot=False,
+            #         s=side / 256,
+            #     )
 
-        # if out_dir is None:
-            # plt.show()
-        if out_dir is not None:
-            Path(out_dir).mkdir(exist_ok=True, parents=True)
-            p = str(Path(out_dir) / Path(image_path).stem) + f"_{k}_{{}}.png"
-            save_plot(p.format("pred"))
-            plt.close()
+            # plots[k] = plt.gcf()
 
-    return plots
+            # # if out_dir is None:
+            #     # plt.show()
+            # if out_dir is not None:
+            #     Path(out_dir).mkdir(exist_ok=True, parents=True)
+            #     p = str(Path(out_dir) / Path(image_path).stem) + f"_{k}_{{}}.png"
+            #     save_plot(p.format("pred"))
+            #     plt.close()
+
+        # Plot output - interactive geoplotter.
+        
+        # # Plot as interactive figure
+        canvas = data['canvas'][keys[0]]
+        world_T_tile = Transform2D.from_Rt(
+                    torch.eye(2), canvas.bbox.min_
+                ).float()
+        world_T_cam_max = world_T_tile @ pred[keys[0]]['tile_T_cam_max']
+        latlon = proj.unproject(world_T_cam_max.t.squeeze(0))
+        bbox_latlon = proj.unproject(canvas.bbox)
+        plot = GeoPlotter(zoom=15.5)
+        # plot.raster(output[0], bbox_latlon, opacity=0.5)
+        # plot.raster(likelihood_overlay(prob.numpy().max(-1)), proj.unproject(bbox))
+        plot.points(proj.latlonalt[:2], "red", name="location prior", size=10)
+        plot.points(latlon, "black", name="argmax", size=10)
+        plot.bbox(bbox_latlon, "blue", name="map tile")
+
+        coordinates = f"(latitude, longitude) = {tuple(map(float, latlon))}"
+        coordinates += f"\nheading angle = {pred[keys[0]]['map_T_cam_max'].angle[0,0]:.2f}°"
+        # return fig1, fig2, plot.fig, coordinates
+
+        return inputs_plot, outputs_plot, plot.fig, coordinates
 
 
 if __name__ == "__main__":
@@ -851,13 +1011,26 @@ if __name__ == "__main__":
     )
     model.run(
         image_path="assets/query_vancouver_3.jpeg",
-        prior_address="Vancouver Waterfront Station",
-        tile_size_meters=275,
+        # prior_address="Vancouver Waterfront Station",
+        prior_address="Aachen Cathedral",
+        tile_size_meters=512,
         out_dir="demo_figures/",
-        hierarchical=True,
+        hierarchical=False,
         topk=1,
     )
 
 # TODO List:
 # add topk visualization
 # pad the image correctly
+# add some images from aachen?
+
+# done
+# fix visualization arrow size
+# check image size
+# use the chained best tile_t_cam for the output map
+# do i show the prior, coarse, and fine results? If so, are the first ones updated after selection?
+    # I think I only update the prior now. So I need to fix this
+
+# geoplotter - interactive map
+
+# find two good pictures?
