@@ -3,6 +3,8 @@ import csv
 import sys
 
 import gradio as gr
+import spaces
+
 import matplotlib.pyplot as plt
 
 from maploc.inference import OrienterNetv2
@@ -13,21 +15,24 @@ from maploc.utils.viz_localization import (
     likelihood_overlay,
     plot_dense_rotations,
 )
+import torch
 
 csv.field_size_limit(sys.maxsize)
 gr.utils.sanitize_value_for_csv = lambda v: v
 
-def run(image, address, tile_size_meters, num_rotations, do_hierarchical, topk):
+device = "cuda" if torch.cuda.is_available() else "cpu"
+model = OrienterNetv2(num_rotations=64, device=device)
+
+@spaces.GPU(duration=12)
+def run(image, address, tile_size_meters, num_rotations, localization_type, topk):
     """Load inputs and return estimated pose """
+    print(f"running inference...")
     image_path = image.name
     
     # Initialize model
-    model = OrienterNetv2(num_rotations=int(num_rotations))
-
 
     try:
-        
-        plots = model.run(image_path, address or None, int(tile_size_meters), do_hierarchical, topk)
+        plots = model.run(image_path, address or None, int(tile_size_meters), hierarchical=localization_type == "Hierarchical", topk=topk)
     except ValueError as e:
         raise gr.Error(str(e))
 
@@ -58,14 +63,14 @@ def run(image, address, tile_size_meters, num_rotations, do_hierarchical, topk):
     #     raise gr.Error(str(e))
 
     # Visualize the predictions
-    overlay = likelihood_overlay(prob.numpy().max(-1), map_viz.mean(-1, keepdims=True))
-    (neural_map_rgb,) = features_to_RGB(neural_map.numpy())
-    plot_images([overlay, neural_map_rgb], titles=["heatmap", "neural map"], pad=2)
-    ax = plt.gcf().axes[0]
-    ax.scatter(*canvas.to_uv(bbox.center), s=5, c="red")
-    plot_dense_rotations(ax, prob, w=0.005, s=1 / 25)
-    add_circle_inset(ax, uv)
-    fig2 = plt.gcf()
+    # overlay = likelihood_overlay(prob.numpy().max(-1), map_viz.mean(-1, keepdims=True))
+    # (neural_map_rgb,) = features_to_RGB(neural_map.numpy())
+    # plot_images([overlay, neural_map_rgb], titles=["heatmap", "neural map"], pad=2)
+    # ax = plt.gcf().axes[0]
+    # ax.scatter(*canvas.to_uv(bbox.center), s=5, c="red")
+    # plot_dense_rotations(ax, prob, w=0.005, s=1 / 25)
+    # add_circle_inset(ax, uv)
+    # fig2 = plt.gcf()
 
     # # Plot as interactive figure
     # latlon = proj.unproject(canvas.to_xy(uv))
@@ -80,15 +85,19 @@ def run(image, address, tile_size_meters, num_rotations, do_hierarchical, topk):
     # coordinates = f"(latitude, longitude) = {tuple(map(float, latlon))}"
     # coordinates += f"\nheading angle = {yaw:.2f}°"
     # return fig1, fig2, plot.fig, coordinates
+
     
-    return *list(plots.values())
+    # Output has to be inputs, outputs1 (on input map), outputs2 (on small map (zoomin))
+    
+    return plots
 
 
 examples = [
-    ["assets/query_zurich_1.JPG", "ETH CAB Zurich", 128, 256],
-    ["assets/query_vancouver_1.JPG", "Vancouver Waterfront Station", 128, 256],
-    ["assets/query_vancouver_2.JPG", None, 128, 256],
-    ["assets/query_vancouver_3.JPG", None, 128, 256],
+    # ["assets/query_zurich_1.JPG", "ETH CAB Zurich", 128, 256],
+    # ["assets/query_vancouver_1.JPG", "Vancouver Waterfront Station", 128, 256],
+    # ["assets/query_vancouver_2.JPG", None, 128, 256],
+    # ["assets/query_vancouver_3.JPG", None, 128, 256],
+    ["assets/query_vancouver_3.jpeg", "Vancouver Waterfront Station", 256, 360, "Hierarchical", 3],
 ]
 
 # TODO: add model architecture.
@@ -99,16 +108,17 @@ description = """
   Improved Visual Localization in 2D Public Maps
   <br>
   with Multi-Scale Neural Matching </h1>
-<h3 align="center">
-    <a href="https://psarlin.com/orienternet" target="_blank">Project Page</a> |
-</h3>
 <p align="center">
-OrienterNetv2 finds the position and orientation of any image using publicly OpenStreetMap maps and/or Satellite imagery.
-This work is my Master Thesis which focused on improving the accuracy, efficiency, and scalability of <a href="https://psarlin.com/orienternet" target="_blank">OrienterNet</a>.
+OrienterNetv2 finds the position and orientation of any image using publicly available 2D maps from OpenStreetMap.
+This work is part of my Master Thesis which is an attempt to improve the accuracy, efficiency, and scalability of <a href="https://psarlin.com/orienternet" target="_blank">OrienterNet</a>.
+
 Click on one of the provided examples or upload your own image!
 </p>
 """
 
+# <h3 align="center">
+#     <a href="https://psarlin.com/orienternet" target="_blank">Project Page</a> |
+# </h3>
 # <a href="https://arxiv.org/pdf/2304.02009.pdf" target="_blank">Paper</a> |
 # <a href="https://github.com/facebookresearch/OrienterNet" target="_blank">Code</a> |
 # <a href="https://youtu.be/wglW8jnupSs" target="_blank">Video</a>
@@ -123,43 +133,46 @@ app = gr.Interface(
             "Enter an address, building, street, or city name.",
         ),
         gr.Radio(
-            [64, 128, 256, 512, 1024, 2048, 4096],
-            value=1024,
+            [64, 128, 256, 512, 1024, 2048],
+            value=256,
             label="Search radius (meters)",
-            info="Depends on how coarse the prior location is.",
+            info="Increasing search radius increases localization difficulty",
         ),
         gr.Radio(
-            [64, 128, 256],
+            [64, 128, 256, 360],
             value=128,
             label="Number of rotations",
-            info="Reduce for faster results",
+            info="Increase for higher accuracy (slower)",
         ),
         # gr.Checkbox(
         #     value=True,
         #     label="Use coarse Prior Model",
         #     info="Effective for searching large areas and/or incorporating visual info from upto 256m in front of camera."
         # ),
-        gr.Checkbox(
-            value=True,
-            label="Hierarchical Localization",
+        gr.Radio(
+            ["Exhaustive", "Hierarchical"],
+            value="Hierarchical",
+            label="Localization Type",
             info="Reduce inference time by hierarchically narrowing down search space"
         ),
         gr.Radio(
             [1, 2, 3, 5, 10],
             value=3,
             label="Hierarchical Search Top-K",
-            info="Higher K values cover larger areas but require more time.",
+            info="Higher K values cover larger areas but require more time. Requires Hierarchical selected above.",
         ),
     ],
     outputs=[
         gr.Plot(label="Inputs"),
         gr.Plot(label="Outputs"),
+        # gr.Plot(label="Final Outputs"),
         gr.Plot(label="Interactive map"),
         gr.Textbox(label="Predicted coordinates"),
     ],
     description=description,
     examples=examples,
-    cache_examples=True,
+    cache_examples=False,
 )
+
 # TODO: add Details
 app.launch(share=False)
